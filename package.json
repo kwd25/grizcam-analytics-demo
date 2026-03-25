@@ -1,0 +1,21 @@
+{
+  "name": "grizcam-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,yellow \"npm run dev --workspace @grizcam/api\" \"npm run dev --workspace @grizcam/web\"",
+    "build": "npm run build --workspaces",
+    "build:web": "npm run build --workspace @grizcam/web",
+    "lint": "npm run lint --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "vercel-build": "npm run build:web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3"
+  }
+}

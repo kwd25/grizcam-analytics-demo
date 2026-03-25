@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #0a1014;
+  --panel: rgba(11, 25, 31, 0.86);
+  --panel-strong: rgba(15, 32, 40, 0.98);
+  --border: rgba(124, 157, 172, 0.18);
+  --text: #edf4f7;
+  --muted: #8ea6b1;
+  --accent: #73e0ae;
+  --accent-2: #59a8ff;
+  --accent-3: #ffcf66;
+  --danger: #ff7c7c;
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(89, 168, 255, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(115, 224, 174, 0.12), transparent 28%),
+    linear-gradient(180deg, #0b1217 0%, #091015 100%);
+  color: var(--text);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.panel-strong {
+  background: var(--panel-strong);
+}
+
+.metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+}
+
+.heatmap-grid-24 {
+  grid-template-columns: 190px repeat(24, minmax(20px, 1fr));
+}
+
+.heatmap-grid-subject {
+  grid-template-columns: 190px repeat(var(--subject-columns), minmax(72px, 1fr));
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+
