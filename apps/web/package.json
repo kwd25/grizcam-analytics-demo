@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "prebuild": "npm run build --workspace @grizcam/shared",
     "dev": "vite",
     "build": "tsc -p tsconfig.app.json && vite build",
     "lint": "tsc -p tsconfig.app.json --noEmit",
