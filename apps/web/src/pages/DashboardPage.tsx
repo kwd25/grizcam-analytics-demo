@@ -150,17 +150,16 @@ export const DashboardPage = () => {
         <FilterBar filters={filters} options={optionsQuery.data} onChange={onFilterChange} onReset={onReset} />
 
         <main className="space-y-4">
-          <div className="rounded-[32px] border border-white/10 bg-white/[0.03] p-5">
+          <div className="rounded-[32px] border border-white/10 bg-white/[0.03] px-5 py-4">
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Local-first reporting UI</div>
-                <h2 className="mt-2 text-3xl font-semibold text-white">Yellowstone 2025 synthetic analytics</h2>
+                <h2 className="text-3xl font-semibold text-white">Yellowstone 2025 synthetic analytics</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-                  A custom React + Express dashboard over the existing Postgres database with filter state in the URL, drilldown views, and server-side event exploration.
+                  Explore synthetic 2025 Yellowstone camera activity with fast filtering, drilldowns, and event-level search.
                 </p>
               </div>
               <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-                {appEnv.demoLabel}. Synthetic 2025 Yellowstone event data for review and discussion.
+                Synthetic Yellowstone 2025 demo data.
               </div>
             </div>
           </div>
@@ -168,8 +167,8 @@ export const DashboardPage = () => {
           <section className="panel rounded-[28px] p-5">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Manager review presets</div>
-                <p className="mt-2 text-sm text-slate-400">Open a bookmarked slice of the demo and share the URL exactly as filtered.</p>
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Presets</div>
+                <p className="mt-2 text-sm text-slate-400">Quick views for common slices of the data.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 {demoPresets.map((preset) => (

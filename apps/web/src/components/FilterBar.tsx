@@ -78,11 +78,7 @@ const RangeInput = ({
 export const FilterBar = ({ filters, options, onChange, onReset }: FilterBarProps) => (
   <aside className="panel rounded-[28px] p-4 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:overflow-auto">
     <div className="mb-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300">Filters</div>
-      <h1 className="mt-2 text-2xl font-semibold text-white">GrizCam analytics cockpit</h1>
-      <p className="mt-2 text-sm leading-6 text-slate-400">
-        Explore 2025 synthetic Yellowstone events with fast camera filtering, drilldowns, and event-level search.
-      </p>
+      <h1 className="text-2xl font-semibold text-white">Filters</h1>
     </div>
 
     <div className="space-y-3">
@@ -163,4 +159,3 @@ export const FilterBar = ({ filters, options, onChange, onReset }: FilterBarProp
     </div>
   </aside>
 );
-
