@@ -7,12 +7,14 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c cyan,yellow \"npm run dev --workspace @grizcam/api\" \"npm run dev --workspace @grizcam/web\"",
-    "build": "npm run build --workspaces",
+    "build:shared": "npm run build --workspace @grizcam/shared",
+    "build:api": "npm run build --workspace @grizcam/api",
     "build:web": "npm run build --workspace @grizcam/web",
-    "lint": "npm run lint --workspaces",
-    "typecheck": "npm run typecheck --workspaces",
-    "vercel-build": "npm run build:web"
+    "dev": "npm run build:shared && concurrently -n api,web -c cyan,yellow \"npm run dev --workspace @grizcam/api\" \"npm run dev --workspace @grizcam/web\"",
+    "build": "npm run build:shared && npm run build:api && npm run build:web",
+    "lint": "npm run lint --workspace @grizcam/shared && npm run lint --workspace @grizcam/api && npm run lint --workspace @grizcam/web",
+    "typecheck": "npm run build:shared && npm run typecheck --workspace @grizcam/shared && npm run typecheck --workspace @grizcam/api && npm run typecheck --workspace @grizcam/web",
+    "vercel-build": "npm run build"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
