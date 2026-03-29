@@ -146,10 +146,8 @@ export const DashboardPage = () => {
 
   return (
     <div className="min-h-screen overflow-x-hidden px-4 py-4 text-slate-100">
-      <div className="mx-auto grid max-w-[1800px] gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
-        <FilterBar filters={filters} options={optionsQuery.data} onChange={onFilterChange} onReset={onReset} />
-
-        <main className="min-w-0 space-y-4">
+      <div className="mx-auto grid max-w-[1800px] gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <main className="min-w-0 space-y-4 lg:order-1">
           <div className="rounded-[32px] border border-white/10 bg-white/[0.03] px-5 py-4">
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
@@ -259,6 +257,10 @@ export const DashboardPage = () => {
             {appEnv.appTitle} is a public synthetic-data demo site prepared for stakeholder review. No live wildlife operations data is exposed here.
           </footer>
         </main>
+
+        <div className="lg:order-2">
+          <FilterBar filters={filters} options={optionsQuery.data} onChange={onFilterChange} onReset={onReset} />
+        </div>
       </div>
     </div>
   );
