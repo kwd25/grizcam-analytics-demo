@@ -20,15 +20,18 @@
   color: var(--text);
 }
 
+html,
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   background: transparent;
+  overflow-x: hidden;
 }
 
 #root {
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .panel {
@@ -36,6 +39,7 @@ body {
   border: 1px solid var(--border);
   backdrop-filter: blur(16px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  min-width: 0;
 }
 
 .panel-strong {
@@ -57,4 +61,3 @@ body {
 input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(1);
 }
-
