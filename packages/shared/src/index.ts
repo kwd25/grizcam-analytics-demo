@@ -148,25 +148,12 @@ export type SubjectCameraHeatmapPoint = {
   uniqueEventGroups: number;
 };
 
-export type MonthlySeasonalityPoint = {
+export type MonthlyActivityCategoryPoint = {
   month: string;
-  splitLabel: string;
-  avgDailyEventGroups: number;
-};
-
-export type BurstinessPoint = {
-  label: string;
-  avgRowsPerGroup: number;
-  burstGroupPct: number;
-  uniqueEventGroups: number;
-};
-
-export type TelemetryPoint = {
-  date: string;
-  cameraName: string;
-  avgBatteryPercentage: number | null;
-  avgTemperature: number | null;
-  activity: number;
+  wildlife: number;
+  human: number;
+  vehicle: number;
+  emptyScene: number;
 };
 
 export type CompositionPoint = {

@@ -1,5 +1,4 @@
 import type {
-  BurstinessPoint,
   CompositionPoint,
   DailyActivityPoint,
   DashboardFilters,
@@ -9,9 +8,8 @@ import type {
   FilterOptionsResponse,
   HourlyHeatmapPoint,
   KpiResponse,
-  MonthlySeasonalityPoint,
+  MonthlyActivityCategoryPoint,
   SubjectCameraHeatmapPoint,
-  TelemetryPoint,
   TimeOfDayCompositionPoint
 } from "@grizcam/shared";
 import { pool } from "../db.js";
@@ -237,87 +235,27 @@ export const getSubjectByCamera = async (filters: DashboardFilters): Promise<Sub
   return result.rows as SubjectCameraHeatmapPoint[];
 };
 
-export const getMonthlySeasonality = async (filters: DashboardFilters): Promise<MonthlySeasonalityPoint[]> => {
+export const getMonthlyActivityByCategory = async (filters: DashboardFilters): Promise<MonthlyActivityCategoryPoint[]> => {
   const filter = buildFilterClause(filters);
   const result = await pool.query(
     `
     with filtered as (
       select * from events e
       ${filter.text}
-    ),
-    camera_day as (
-      select
-        date_trunc('month', timestamp)::date as month_start,
-        camera_name,
-        timestamp::date as day,
-        count(distinct event) as groups
-      from filtered
-      group by 1, 2, 3
     )
     select
-      to_char(month_start, 'YYYY-MM') as month,
-      camera_name as "splitLabel",
-      avg(groups)::float as "avgDailyEventGroups"
-    from camera_day
-    group by 1, 2
-    order by 1 asc, 2 asc
-    `,
-    filter.values
-  );
-  return result.rows as MonthlySeasonalityPoint[];
-};
-
-export const getBurstiness = async (filters: DashboardFilters): Promise<BurstinessPoint[]> => {
-  const filter = buildFilterClause(filters);
-  const result = await pool.query(
-    `
-    with filtered as (
-      select * from events e
-      ${filter.text}
-    ),
-    event_groups as (
-      select
-        camera_name,
-        event,
-        count(*) as row_count
-      from filtered
-      group by 1, 2
-    )
-    select
-      camera_name as label,
-      avg(row_count)::float as "avgRowsPerGroup",
-      (100.0 * count(*) filter (where row_count > 1) / nullif(count(*), 0))::float as "burstGroupPct",
-      count(*)::int as "uniqueEventGroups"
-    from event_groups
+      to_char(date_trunc('month', timestamp), 'YYYY-MM') as month,
+      count(distinct event) filter (where subject_category = 'wildlife')::int as wildlife,
+      count(distinct event) filter (where subject_category = 'human')::int as human,
+      count(distinct event) filter (where subject_category = 'vehicle')::int as vehicle,
+      count(distinct event) filter (where subject_category = 'empty_scene')::int as "emptyScene"
+    from filtered
     group by 1
     order by 1 asc
     `,
     filter.values
   );
-  return result.rows as BurstinessPoint[];
-};
-
-export const getTelemetry = async (filters: DashboardFilters): Promise<TelemetryPoint[]> => {
-  const filter = buildFilterClause(filters);
-  const result = await pool.query(
-    `
-    with filtered as (
-      select * from events e
-      ${filter.text}
-    )
-    select
-      timestamp::date::text as date,
-      camera_name as "cameraName",
-      avg(battery_percentage)::float as "avgBatteryPercentage",
-      avg(temperature)::float as "avgTemperature",
-      count(distinct event)::int as activity
-    from filtered
-    group by 1, 2
-    order by 1 asc, 2 asc
-    `,
-    filter.values
-  );
-  return result.rows as TelemetryPoint[];
+  return result.rows as MonthlyActivityCategoryPoint[];
 };
 
 export const getComposition = async (filters: DashboardFilters): Promise<CompositionPoint[]> => {
