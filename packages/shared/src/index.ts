@@ -107,7 +107,6 @@ export type FilterOptionsResponse = {
 export type KpiResponse = {
   totalRawRows: number;
   totalUniqueEventGroups: number;
-  selectedCamerasCount: number;
   wildlifeSharePct: number;
   humanSharePct: number;
   vehicleSharePct: number;
@@ -115,13 +114,10 @@ export type KpiResponse = {
   peakActivityHour: number | null;
   avgDailyEventGroups: number;
   avgBurstLength: number;
-  burstIntensity: number;
   biodiversityScore: number;
-  disturbanceScore: number;
   nocturnalityScore: number;
   dawnDuskPreference: number;
-  cameraVolatility: number;
-  rareEventGroups: number;
+  topSpecies: string | null;
 };
 
 export type DailyActivityPoint = {
@@ -216,4 +212,3 @@ export type EventsResponse = {
   total: number;
   rows: EventRecord[];
 };
-

@@ -1,5 +1,5 @@
 import type { KpiResponse } from "@grizcam/shared";
-import { formatCompactNumber, formatNumber, formatPercent } from "../lib/utils";
+import { formatCompactNumber, formatNumber, formatPercent, titleCase } from "../lib/utils";
 
 const MetricCard = ({ label, value, tone = "text-white" }: { label: string; value: string; tone?: string }) => (
   <div className="panel rounded-3xl p-4">
@@ -9,42 +9,27 @@ const MetricCard = ({ label, value, tone = "text-white" }: { label: string; valu
 );
 
 export const KpiStrip = ({ data }: { data: KpiResponse }) => {
-  const primary = [
-    ["Total Raw Rows", formatCompactNumber(data.totalRawRows)],
-    ["Unique Event Groups", formatCompactNumber(data.totalUniqueEventGroups)],
-    ["Selected Cameras", formatNumber(data.selectedCamerasCount)],
+  const cards = [
+    ["Total Events", formatCompactNumber(data.totalUniqueEventGroups), "text-white"],
+    ["Total Captures", formatCompactNumber(data.totalRawRows), "text-white"],
     ["Wildlife Share", formatPercent(data.wildlifeSharePct / 100)],
     ["Human Share", formatPercent(data.humanSharePct / 100)],
     ["Vehicle Share", formatPercent(data.vehicleSharePct / 100)],
     ["Most Active Camera", data.mostActiveCamera ?? "N/A"],
     ["Peak Activity Hour", data.peakActivityHour === null ? "N/A" : `${data.peakActivityHour}:00`],
-    ["Avg Daily Groups", formatNumber(data.avgDailyEventGroups, 1)],
-    ["Avg Burst Length", formatNumber(data.avgBurstLength, 2)]
-  ];
-
-  const secondary = [
-    ["Burst Intensity", formatNumber(data.burstIntensity, 2)],
-    ["Biodiversity Score", formatNumber(data.biodiversityScore)],
-    ["Disturbance Score", formatNumber(data.disturbanceScore, 1)],
-    ["Nocturnality", formatPercent(data.nocturnalityScore)],
-    ["Dawn/Dusk Preference", formatPercent(data.dawnDuskPreference)],
-    ["Camera Volatility", formatNumber(data.cameraVolatility, 2)],
-    ["Rare Bear/Wolf Groups", formatNumber(data.rareEventGroups)]
+    ["Avg Daily Events", formatNumber(data.avgDailyEventGroups, 1)],
+    ["Avg Images per Event", formatNumber(data.avgBurstLength, 2)],
+    ["Wildlife Types Seen", formatNumber(data.biodiversityScore), "text-emerald-300"],
+    ["Night Activity Share", formatPercent(data.nocturnalityScore), "text-emerald-300"],
+    ["Dawn/Dusk Activity Share", formatPercent(data.dawnDuskPreference), "text-emerald-300"],
+    ["Top Species", data.topSpecies ? titleCase(data.topSpecies) : "N/A", "text-emerald-300"]
   ];
 
   return (
-    <div className="space-y-3">
-      <div className="grid metric-grid gap-3">
-        {primary.map(([label, value]) => (
-          <MetricCard key={label} label={label} value={value} />
-        ))}
-      </div>
-      <div className="grid metric-grid gap-3">
-        {secondary.map(([label, value]) => (
-          <MetricCard key={label} label={label} value={value} tone="text-emerald-300" />
-        ))}
-      </div>
+    <div className="grid metric-grid gap-3">
+      {cards.map(([label, value, tone]) => (
+        <MetricCard key={label} label={label} value={value} tone={tone} />
+      ))}
     </div>
   );
 };
-

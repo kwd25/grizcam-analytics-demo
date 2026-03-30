@@ -99,6 +99,14 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
       order by groups desc, hour_value asc
       limit 1
     ),
+    top_species as (
+      select subject_class, count(*) as groups
+      from event_groups
+      where subject_class is not null
+      group by 1
+      order by groups desc, subject_class asc
+      limit 1
+    ),
     camera_daily as (
       select camera_name, first_seen::date as day, count(*) as groups
       from event_groups
@@ -107,7 +115,6 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
     select
       (select count(*) from filtered) as total_raw_rows,
       (select count(*) from event_groups) as total_unique_event_groups,
-      (select count(distinct camera_name) from filtered) as selected_cameras_count,
       (select coalesce(100.0 * count(*) filter (where subject_category = 'wildlife') / nullif(count(*), 0), 0) from event_groups) as wildlife_share_pct,
       (select coalesce(100.0 * count(*) filter (where subject_category = 'human') / nullif(count(*), 0), 0) from event_groups) as human_share_pct,
       (select coalesce(100.0 * count(*) filter (where subject_category = 'vehicle') / nullif(count(*), 0), 0) from event_groups) as vehicle_share_pct,
@@ -115,13 +122,10 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
       (select hour_value from hourly_groups) as peak_activity_hour,
       (select coalesce(avg(groups), 0) from daily_groups) as avg_daily_event_groups,
       (select coalesce(avg(row_count), 0) from event_groups) as avg_burst_length,
-      (select coalesce(sum(row_count)::numeric / nullif(count(*), 0), 0) from event_groups) as burst_intensity,
       (select count(distinct subject_class) from event_groups where subject_category = 'wildlife') as biodiversity_score,
-      (select coalesce(sum(case when subject_category = 'human' then row_count * 1.0 when subject_category = 'vehicle' then row_count * 1.5 else 0 end), 0) from event_groups) as disturbance_score,
       (select coalesce(count(*) filter (where extract(hour from first_seen) between 22 and 23 or extract(hour from first_seen) between 0 and 5)::numeric / nullif(count(*), 0), 0) from event_groups) as nocturnality_score,
       (select coalesce(count(*) filter (where extract(hour from first_seen) between 6 and 11 or extract(hour from first_seen) between 17 and 21)::numeric / nullif(count(*), 0), 0) from event_groups) as dawn_dusk_preference,
-      (select coalesce(avg(groups), 0) from (select camera_name, stddev_pop(groups) as groups from camera_daily group by camera_name) volatility) as camera_volatility,
-      (select count(*) from event_groups where subject_class in ('bear', 'wolf')) as rare_event_groups
+      (select subject_class from top_species) as top_species
     `,
     filter.values
   );
@@ -130,7 +134,6 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
   return {
     totalRawRows: Number(row.total_raw_rows ?? 0),
     totalUniqueEventGroups: Number(row.total_unique_event_groups ?? 0),
-    selectedCamerasCount: Number(row.selected_cameras_count ?? 0),
     wildlifeSharePct: Number(row.wildlife_share_pct ?? 0),
     humanSharePct: Number(row.human_share_pct ?? 0),
     vehicleSharePct: Number(row.vehicle_share_pct ?? 0),
@@ -138,13 +141,10 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
     peakActivityHour: row.peak_activity_hour === null ? null : Number(row.peak_activity_hour),
     avgDailyEventGroups: Number(row.avg_daily_event_groups ?? 0),
     avgBurstLength: Number(row.avg_burst_length ?? 0),
-    burstIntensity: Number(row.burst_intensity ?? 0),
     biodiversityScore: Number(row.biodiversity_score ?? 0),
-    disturbanceScore: Number(row.disturbance_score ?? 0),
     nocturnalityScore: Number(row.nocturnality_score ?? 0),
     dawnDuskPreference: Number(row.dawn_dusk_preference ?? 0),
-    cameraVolatility: Number(row.camera_volatility ?? 0),
-    rareEventGroups: Number(row.rare_event_groups ?? 0)
+    topSpecies: row.top_species ? String(row.top_species) : null
   };
 };
 
