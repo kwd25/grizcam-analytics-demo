@@ -4,11 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import { Heatmap } from "../components/charts/Heatmap";
-import { BurstinessChart } from "../components/charts/BurstinessChart";
 import { CompositionChart } from "../components/charts/CompositionChart";
 import { DailyTrendChart } from "../components/charts/DailyTrendChart";
-import { MonthlySeasonalityChart } from "../components/charts/MonthlySeasonalityChart";
-import { TelemetryChart } from "../components/charts/TelemetryChart";
+import { MonthlyActivityByCategoryChart } from "../components/charts/MonthlyActivityByCategoryChart";
 import { TimeOfDayChart } from "../components/charts/TimeOfDayChart";
 import { DayDetailPanel } from "../components/DayDetailPanel";
 import { EventTable } from "../components/EventTable";
@@ -82,9 +80,10 @@ export const DashboardPage = () => {
   const hourlyHeatmapQuery = useQuery({ queryKey: ["hourly-heatmap", stableFilters], queryFn: () => api.hourlyHeatmap(stableFilters) });
   const timeOfDayQuery = useQuery({ queryKey: ["time-of-day", stableFilters], queryFn: () => api.timeOfDayComposition(stableFilters) });
   const subjectByCameraQuery = useQuery({ queryKey: ["subject-camera", stableFilters], queryFn: () => api.subjectByCamera(stableFilters) });
-  const monthlySeasonalityQuery = useQuery({ queryKey: ["monthly-seasonality", stableFilters], queryFn: () => api.monthlySeasonality(stableFilters) });
-  const burstinessQuery = useQuery({ queryKey: ["burstiness", stableFilters], queryFn: () => api.burstiness(stableFilters) });
-  const telemetryQuery = useQuery({ queryKey: ["telemetry", stableFilters], queryFn: () => api.telemetry(stableFilters) });
+  const monthlyActivityByCategoryQuery = useQuery({
+    queryKey: ["monthly-activity-by-category", stableFilters],
+    queryFn: () => api.monthlyActivityByCategory(stableFilters)
+  });
   const compositionQuery = useQuery({ queryKey: ["composition", stableFilters], queryFn: () => api.composition(stableFilters) });
   const daySummaryQuery = useQuery({
     queryKey: ["day-summary", selectedDate, stableFilters],
@@ -214,8 +213,8 @@ export const DashboardPage = () => {
 
             {subjectByCameraQuery.data ? (
               <Heatmap
-                title="Subject-By-Camera Heatmap"
-                subtitle="Unique event groups by camera and detected subject class."
+                title="Subject Mix by Camera"
+                subtitle="Compare what each camera sees most often."
                 rows={subjectRows}
                 columns={subjectColumns}
                 variant="subject"
@@ -230,19 +229,17 @@ export const DashboardPage = () => {
             )}
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 xl:grid-cols-2">
             {timeOfDayQuery.data ? <TimeOfDayChart data={timeOfDayQuery.data} /> : <QueryState error={timeOfDayQuery.error as Error | null} />}
             {compositionQuery.data ? <CompositionChart data={compositionQuery.data} /> : <QueryState error={compositionQuery.error as Error | null} />}
-            {burstinessQuery.data ? <BurstinessChart data={burstinessQuery.data} /> : <QueryState error={burstinessQuery.error as Error | null} />}
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            {monthlySeasonalityQuery.data ? (
-              <MonthlySeasonalityChart data={monthlySeasonalityQuery.data} />
+          <div className="grid gap-4">
+            {monthlyActivityByCategoryQuery.data ? (
+              <MonthlyActivityByCategoryChart data={monthlyActivityByCategoryQuery.data} />
             ) : (
-              <QueryState error={monthlySeasonalityQuery.error as Error | null} />
+              <QueryState error={monthlyActivityByCategoryQuery.error as Error | null} />
             )}
-            {telemetryQuery.data ? <TelemetryChart data={telemetryQuery.data} /> : <QueryState error={telemetryQuery.error as Error | null} />}
           </div>
 
           <EventTable

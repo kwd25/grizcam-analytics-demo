@@ -1,5 +1,4 @@
 import type {
-  BurstinessPoint,
   CompositionPoint,
   DailyActivityPoint,
   DashboardFilters,
@@ -9,9 +8,8 @@ import type {
   FilterOptionsResponse,
   HourlyHeatmapPoint,
   KpiResponse,
-  MonthlySeasonalityPoint,
+  MonthlyActivityCategoryPoint,
   SubjectCameraHeatmapPoint,
-  TelemetryPoint,
   TimeOfDayCompositionPoint
 } from "@grizcam/shared";
 import { appEnv } from "./env";
@@ -54,9 +52,8 @@ export const api = {
   hourlyHeatmap: (filters: DashboardFilters) => fetchJson<HourlyHeatmapPoint[]>("/api/charts/hourly-heatmap", filters),
   timeOfDayComposition: (filters: DashboardFilters) => fetchJson<TimeOfDayCompositionPoint[]>("/api/charts/time-of-day-composition", filters),
   subjectByCamera: (filters: DashboardFilters) => fetchJson<SubjectCameraHeatmapPoint[]>("/api/charts/subject-by-camera", filters),
-  monthlySeasonality: (filters: DashboardFilters) => fetchJson<MonthlySeasonalityPoint[]>("/api/charts/monthly-seasonality", filters),
-  burstiness: (filters: DashboardFilters) => fetchJson<BurstinessPoint[]>("/api/charts/burstiness", filters),
-  telemetry: (filters: DashboardFilters) => fetchJson<TelemetryPoint[]>("/api/charts/telemetry", filters),
+  monthlyActivityByCategory: (filters: DashboardFilters) =>
+    fetchJson<MonthlyActivityCategoryPoint[]>("/api/charts/monthly-activity-by-category", filters),
   composition: (filters: DashboardFilters) => fetchJson<CompositionPoint[]>("/api/charts/composition", filters),
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),

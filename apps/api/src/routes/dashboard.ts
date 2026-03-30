@@ -2,7 +2,6 @@ import { Router } from "express";
 import { appConfig } from "../config.js";
 import { pool } from "../db.js";
 import {
-  getBurstiness,
   getComposition,
   getDailyActivity,
   getDaySummary,
@@ -12,9 +11,8 @@ import {
   getFilterOptions,
   getHourlyHeatmap,
   getKpis,
-  getMonthlySeasonality,
+  getMonthlyActivityByCategory,
   getSubjectByCamera,
-  getTelemetry,
   getTimeOfDayComposition
 } from "../queries/dashboard.js";
 import { parseEventQuery, parseFilters } from "../utils/requests.js";
@@ -58,16 +56,8 @@ dashboardRouter.get("/charts/subject-by-camera", async (request, response) => {
   response.json(await getSubjectByCamera(parseFilters(request.query as Record<string, unknown>)));
 });
 
-dashboardRouter.get("/charts/monthly-seasonality", async (request, response) => {
-  response.json(await getMonthlySeasonality(parseFilters(request.query as Record<string, unknown>)));
-});
-
-dashboardRouter.get("/charts/burstiness", async (request, response) => {
-  response.json(await getBurstiness(parseFilters(request.query as Record<string, unknown>)));
-});
-
-dashboardRouter.get("/charts/telemetry", async (request, response) => {
-  response.json(await getTelemetry(parseFilters(request.query as Record<string, unknown>)));
+dashboardRouter.get("/charts/monthly-activity-by-category", async (request, response) => {
+  response.json(await getMonthlyActivityByCategory(parseFilters(request.query as Record<string, unknown>)));
 });
 
 dashboardRouter.get("/charts/composition", async (request, response) => {
