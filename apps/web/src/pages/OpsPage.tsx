@@ -89,19 +89,10 @@ export const OpsPage = () => {
   return (
     <AppShell
       title="GrizCam Ops Dashboard"
-      subtitle="Fleet health, processing pipeline, telemetry, and notable operational events from the richer raw-like event stream."
+      subtitle="Fleet health, pipeline status, and the cameras that need attention."
       badge={`${appEnv.demoLabel} • Operations`}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={patchFilters} onReset={resetFilters} />}
     >
-      <section className="panel rounded-[28px] p-5">
-        <div className="mb-4">
-          <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Operations</div>
-          <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Triage-first operations console for fleet status, pipeline bottlenecks, and the cameras that need follow-up now.
-          </p>
-        </div>
-      </section>
-
       {overview ? <OpsKpiStrip data={overview} /> : <QueryState error={overviewQuery.error as Error | null} />}
 
       {overview ? (
