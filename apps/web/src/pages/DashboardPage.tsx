@@ -2,17 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { defaultDashboardFilters, type EventQuery } from "@grizcam/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Area,
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
-  ComposedChart,
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -24,10 +19,15 @@ import { DayDetailPanel } from "../components/DayDetailPanel";
 import { EventTable } from "../components/EventTable";
 import { FilterBar } from "../components/FilterBar";
 import { InsightList } from "../components/InsightList";
+import { KpiStrip } from "../components/KpiStrip";
 import { NotableEventsList } from "../components/NotableEventsList";
-import { OverviewKpiStrip } from "../components/OverviewKpiStrip";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
+import { CompositionChart } from "../components/charts/CompositionChart";
+import { DailyTrendChart } from "../components/charts/DailyTrendChart";
+import { Heatmap } from "../components/charts/Heatmap";
+import { MonthlyActivityByCategoryChart } from "../components/charts/MonthlyActivityByCategoryChart";
+import { TimeOfDayChart } from "../components/charts/TimeOfDayChart";
 import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import {
@@ -73,6 +73,16 @@ export const DashboardPage = () => {
   }, [filters]);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
+  const kpiQuery = useQuery({ queryKey: ["kpis", stableFilters], queryFn: () => api.kpis(stableFilters) });
+  const dailyActivityQuery = useQuery({ queryKey: ["daily-activity", stableFilters], queryFn: () => api.dailyActivity(stableFilters) });
+  const hourlyHeatmapQuery = useQuery({ queryKey: ["hourly-heatmap", stableFilters], queryFn: () => api.hourlyHeatmap(stableFilters) });
+  const timeOfDayQuery = useQuery({ queryKey: ["time-of-day", stableFilters], queryFn: () => api.timeOfDayComposition(stableFilters) });
+  const subjectByCameraQuery = useQuery({ queryKey: ["subject-camera", stableFilters], queryFn: () => api.subjectByCamera(stableFilters) });
+  const monthlyActivityByCategoryQuery = useQuery({
+    queryKey: ["monthly-activity-by-category", stableFilters],
+    queryFn: () => api.monthlyActivityByCategory(stableFilters)
+  });
+  const compositionQuery = useQuery({ queryKey: ["composition", stableFilters], queryFn: () => api.composition(stableFilters) });
   const overviewQuery = useQuery({ queryKey: ["overview", stableFilters], queryFn: () => api.overview(stableFilters) });
   const daySummaryQuery = useQuery({
     queryKey: ["day-summary", selectedDate, stableFilters],
@@ -115,11 +125,10 @@ export const DashboardPage = () => {
   }, []);
 
   const overview = overviewQuery.data;
-  const categoryTrendRows =
-    overview?.categoryTrend.map((row) => ({
-      ...row,
-      total: row.wildlife + row.human + row.vehicle + row.emptyScene + row.unknown
-    })) ?? [];
+  const hourlyRows = Array.from(new Set(hourlyHeatmapQuery.data?.map((point) => point.cameraName) ?? []));
+  const hourlyColumns = Array.from({ length: 24 }, (_, index) => String(index));
+  const subjectRows = Array.from(new Set(subjectByCameraQuery.data?.map((point) => point.cameraName) ?? []));
+  const subjectColumns = Array.from(new Set(subjectByCameraQuery.data?.map((point) => point.subjectClass) ?? []));
 
   return (
     <AppShell
@@ -128,41 +137,100 @@ export const DashboardPage = () => {
       badge={appEnv.demoLabel}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={onFilterChange} onReset={onReset} />}
     >
-      {overview ? <OverviewKpiStrip data={overview.kpis} /> : <QueryState error={overviewQuery.error as Error | null} />}
+      {kpiQuery.data ? <KpiStrip data={kpiQuery.data} /> : <QueryState error={kpiQuery.error as Error | null} />}
 
-      {overview ? <InsightList items={overview.insights} /> : null}
+      <section className="panel rounded-[28px] p-5">
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Classic Analytics</div>
+          <p className="mt-2 text-sm text-slate-400">Restored core analytics views from the earlier dashboard, still powered by the current filter state.</p>
+        </div>
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        {dailyActivityQuery.data ? (
+          <DailyTrendChart data={dailyActivityQuery.data} onSelectDate={setSelectedDate} />
+        ) : (
+          <QueryState error={dailyActivityQuery.error as Error | null} />
+        )}
+
+        <DayDetailPanel selectedDate={selectedDate} data={daySummaryQuery.data} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {hourlyHeatmapQuery.data ? (
+          <Heatmap
+            title="Hour-Of-Day Heatmap"
+            subtitle="Unique event groups by camera and local hour."
+            rows={hourlyRows}
+            columns={hourlyColumns}
+            data={hourlyHeatmapQuery.data.map((point) => ({
+              row: point.cameraName,
+              column: String(point.hour),
+              value: point.uniqueEventGroups
+            }))}
+          />
+        ) : (
+          <QueryState error={hourlyHeatmapQuery.error as Error | null} />
+        )}
+
+        {subjectByCameraQuery.data ? (
+          <Heatmap
+            title="Subject Mix by Camera"
+            subtitle="Compare what each camera sees most often."
+            rows={subjectRows}
+            columns={subjectColumns}
+            variant="subject"
+            data={subjectByCameraQuery.data.map((point) => ({
+              row: point.cameraName,
+              column: point.subjectClass,
+              value: point.uniqueEventGroups
+            }))}
+          />
+        ) : (
+          <QueryState error={subjectByCameraQuery.error as Error | null} />
+        )}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {timeOfDayQuery.data ? <TimeOfDayChart data={timeOfDayQuery.data} /> : <QueryState error={timeOfDayQuery.error as Error | null} />}
+
+        {monthlyActivityByCategoryQuery.data ? (
+          <MonthlyActivityByCategoryChart data={monthlyActivityByCategoryQuery.data} />
+        ) : (
+          <QueryState error={monthlyActivityByCategoryQuery.error as Error | null} />
+        )}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {compositionQuery.data ? <CompositionChart data={compositionQuery.data} /> : <QueryState error={compositionQuery.error as Error | null} />}
+
         {overview ? (
-          <SectionCard title="Event Trend" subtitle="Grouped event volume by day and category. Click a day to drill into the underlying events.">
-            <div className="h-80">
+          <SectionCard title="Event Burst Distribution" subtitle="How often grouped events arrive as single captures versus longer bursts.">
+            <div className="h-72">
               <ResponsiveContainer>
-                <ComposedChart data={categoryTrendRows} onClick={(state) => state?.activeLabel && setSelectedDate(String(state.activeLabel))}>
-                  <defs>
-                    <linearGradient id="dash-total" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="0%" stopColor="#73e0ae" stopOpacity={0.28} />
-                      <stop offset="100%" stopColor="#73e0ae" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
+                <BarChart data={overview.burstDistribution}>
                   <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                  <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={36} />
+                  <XAxis dataKey="burstSize" stroke="#8ea6b1" />
                   <YAxis stroke="#8ea6b1" />
                   <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                  <Legend />
-                  <Area type="monotone" dataKey="total" stroke="#73e0ae" fill="url(#dash-total)" strokeWidth={2} name="Total" />
-                  <Line type="monotone" dataKey="wildlife" stroke="#59a8ff" dot={false} strokeWidth={1.6} name="Wildlife" />
-                  <Line type="monotone" dataKey="human" stroke="#ffcf66" dot={false} strokeWidth={1.6} name="Human" />
-                  <Line type="monotone" dataKey="vehicle" stroke="#ff7c7c" dot={false} strokeWidth={1.6} name="Vehicle" />
-                </ComposedChart>
+                  <Bar dataKey="count" fill="#59a8ff" radius={[8, 8, 0, 0]} />
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </SectionCard>
         ) : (
           <QueryState error={overviewQuery.error as Error | null} />
         )}
-
-        <DayDetailPanel selectedDate={selectedDate} data={daySummaryQuery.data} />
       </div>
+
+      <section className="panel rounded-[28px] p-5">
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Operations & Intelligence</div>
+          <p className="mt-2 text-sm text-slate-400">New additive sections built on the richer operational, telemetry, and raw-like event schema.</p>
+        </div>
+      </section>
+
+      {overview ? <InsightList items={overview.insights} /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
         {overview ? <CameraHealthTable rows={overview.cameraHealth} /> : <QueryState error={overviewQuery.error as Error | null} />}
@@ -205,62 +273,6 @@ export const DashboardPage = () => {
               </div>
             </SectionCard>
           </div>
-        ) : (
-          <QueryState error={overviewQuery.error as Error | null} />
-        )}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {overview ? (
-          <SectionCard title="Category Mix" subtitle="What the cameras are seeing across the current selection.">
-            <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-              <div className="h-72">
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie data={overview.categoryDistribution} dataKey="count" nameKey="category" innerRadius={54} outerRadius={88} paddingAngle={3}>
-                      {overview.categoryDistribution.map((entry, index) => (
-                        <Cell key={entry.category} fill={chartPalette[index % chartPalette.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="space-y-3">
-                {overview.categoryDistribution.map((item, index) => (
-                  <div key={item.category} className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: chartPalette[index % chartPalette.length] }} />
-                      <span className="text-sm text-slate-200">{titleCase(item.category)}</span>
-                    </div>
-                    <span className="text-sm text-slate-400">{formatNumber(item.count)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </SectionCard>
-        ) : (
-          <QueryState error={overviewQuery.error as Error | null} />
-        )}
-
-        {overview ? (
-          <SectionCard title="Hourly Activity" subtitle="When detections are happening, broken out by category.">
-            <div className="h-72">
-              <ResponsiveContainer>
-                <BarChart data={overview.hourlyActivity}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                  <XAxis dataKey="hour" stroke="#8ea6b1" />
-                  <YAxis stroke="#8ea6b1" />
-                  <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                  <Legend />
-                  <Bar dataKey="wildlife" stackId="hour" fill="#59a8ff" radius={[8, 8, 0, 0]} />
-                  <Bar dataKey="human" stackId="hour" fill="#ffcf66" />
-                  <Bar dataKey="vehicle" stackId="hour" fill="#ff7c7c" />
-                  <Bar dataKey="emptyScene" stackId="hour" fill="#6ee7f9" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </SectionCard>
         ) : (
           <QueryState error={overviewQuery.error as Error | null} />
         )}
