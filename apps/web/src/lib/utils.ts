@@ -15,3 +15,11 @@ export const titleCase = (value: string) =>
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
+export const formatEventTimestamp = (value: string | null | undefined) => {
+  if (!value) {
+    return "Unknown time";
+  }
+
+  const normalized = value.replace("T", " ");
+  return normalized.length >= 16 ? normalized.slice(0, 16) : normalized;
+};

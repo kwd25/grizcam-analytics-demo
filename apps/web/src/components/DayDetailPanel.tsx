@@ -1,6 +1,6 @@
 import type { DaySummaryResponse } from "@grizcam/shared";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { formatNumber, titleCase } from "../lib/utils";
+import { formatEventTimestamp, formatNumber, titleCase } from "../lib/utils";
 import { SectionCard } from "./SectionCard";
 
 export const DayDetailPanel = ({ selectedDate, data }: { selectedDate?: string; data?: DaySummaryResponse }) => (
@@ -78,7 +78,7 @@ export const DayDetailPanel = ({ selectedDate, data }: { selectedDate?: string; 
               <tbody>
                 {data.events.map((event) => (
                   <tr key={event.id} className="border-t border-white/5 align-top text-slate-200">
-                    <td className="px-2 py-2">{event.timestamp.slice(0, 16).replace("T", " ")}</td>
+                    <td className="px-2 py-2">{formatEventTimestamp(event.timestamp)}</td>
                     <td className="px-2 py-2">{event.cameraName}</td>
                     <td className="px-2 py-2">{titleCase(event.subjectClass ?? "unknown")}</td>
                     <td className="px-2 py-2 text-slate-400">{event.analysisSummary ?? event.analysisTitle ?? "No summary"}</td>
@@ -92,4 +92,3 @@ export const DayDetailPanel = ({ selectedDate, data }: { selectedDate?: string; 
     )}
   </SectionCard>
 );
-

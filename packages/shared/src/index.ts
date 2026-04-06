@@ -191,6 +191,10 @@ export type EventRecord = {
   batteryPercentage: number | null;
   filename: string | null;
   imageBlobUrl: string | null;
+  aiProcessed?: boolean | null;
+  jsonProcessed?: boolean | null;
+  uploaded?: boolean | null;
+  voltage?: number | null;
 };
 
 export type EventsResponse = {
