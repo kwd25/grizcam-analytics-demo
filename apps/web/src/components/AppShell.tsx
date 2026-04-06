@@ -10,8 +10,9 @@ type AppShellProps = PropsWithChildren<{
 }>;
 
 const navItems = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/analytics-lab", label: "Analytics Lab" }
+  { to: "/", label: "Overview", end: true },
+  { to: "/ops", label: "Ops" },
+  { to: "/analytics-lab", label: "ML" }
 ];
 
 export const AppShell = ({ title, subtitle, badge, aside, children }: AppShellProps) => (
