@@ -1,29 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AppShell } from "../components/AppShell";
 import { FilterBar } from "../components/FilterBar";
 import { SectionCard } from "../components/SectionCard";
-import { StatusBadge } from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
-import {
-  classNames,
-  formatNumber,
-  formatSignedNumber,
-  titleCase
-} from "../lib/utils";
+import { classNames, formatNumber, formatSignedNumber, titleCase } from "../lib/utils";
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
 
 const QueryState = ({ error }: { error?: Error | null }) => (
@@ -58,6 +41,22 @@ const shiftCellClass = (value: number) => {
   return "bg-white/5 text-slate-300";
 };
 
+const residualCellClass = (value: number) => {
+  if (value >= 40) {
+    return "bg-emerald-400/35 text-emerald-100";
+  }
+  if (value >= 15) {
+    return "bg-emerald-400/20 text-emerald-100";
+  }
+  if (value <= -40) {
+    return "bg-rose-400/35 text-rose-100";
+  }
+  if (value <= -15) {
+    return "bg-rose-400/20 text-rose-100";
+  }
+  return "bg-white/5 text-slate-300";
+};
+
 export const AdvancedPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
   const stableFilters = useMemo(() => filters, [filters]);
@@ -66,48 +65,31 @@ export const AdvancedPage = () => {
 
   const analytics = analyticsQuery.data;
   const forecastLeaderNames = analytics?.cameraForecastLeaders.slice(0, 5).map((item) => item.cameraName) ?? [];
-  const forecastTrendData =
+  const forecastDateColumns = Array.from(new Set(
+    analytics?.cameraForecast.filter((item) => forecastLeaderNames.includes(item.cameraName)).map((item) => item.date) ?? []
+  )).sort();
+  const forecastResidualLookup = new Map(
     analytics?.cameraForecast
       .filter((item) => forecastLeaderNames.includes(item.cameraName))
-      .map((item) => ({ ...item, label: `${item.cameraName.split(" ")[0]} ${item.date.slice(5)}` })) ?? [];
+      .map((item) => [`${item.cameraName}|||${item.date}`, item]) ?? []
+  );
   const shiftCameraRows = Array.from(new Set(analytics?.categoryShiftMatrix.slice(0, 24).map((item) => item.cameraName) ?? []));
   const shiftColumns = Array.from(new Set(analytics?.categoryShiftMatrix.slice(0, 24).map((item) => item.category) ?? []));
   const shiftLookup = new Map(
     analytics?.categoryShiftMatrix.slice(0, 24).map((item) => [`${item.cameraName}|||${item.category}`, item]) ?? []
   );
-  const noveltyTrend = analytics?.anomalyTimeline ?? [];
   const forecastSurpriseData =
-    analytics?.cameraForecastLeaders.map((item) => ({
-      cameraName: item.cameraName,
-      delta: item.delta,
-      residualPct: item.residualPct
-    })) ?? [];
-  const noveltyMixByCategory = Array.from(
-    (analytics?.novelEvents ?? []).reduce((accumulator, item) => {
-      const current = accumulator.get(item.category) ?? {
-        category: item.category,
-        currentCount: 0,
-        noveltyScoreTotal: 0,
-        highNoveltyCount: 0,
-        itemCount: 0
-      };
-
-      current.currentCount += item.currentCount;
-      current.noveltyScoreTotal += item.noveltyScore;
-      current.highNoveltyCount += item.noveltyScore >= 70 ? 1 : 0;
-      current.itemCount += 1;
-      accumulator.set(item.category, current);
-      return accumulator;
-    }, new Map<string, { category: string; currentCount: number; noveltyScoreTotal: number; highNoveltyCount: number; itemCount: number }>())
-      .values()
-  )
-    .map((item) => ({
-      category: titleCase(item.category),
-      currentCount: item.currentCount,
-      avgNoveltyScore: item.itemCount > 0 ? Number((item.noveltyScoreTotal / item.itemCount).toFixed(1)) : 0,
-      highNoveltyCount: item.highNoveltyCount
-    }))
-    .sort((left, right) => right.avgNoveltyScore - left.avgNoveltyScore || right.currentCount - left.currentCount);
+    analytics?.cameraForecastLeaders
+      .map((item) => ({
+        cameraName: item.cameraName,
+        residualPct: item.residualPct,
+        actual: item.actual,
+        expected: item.expected,
+        delta: item.delta
+      }))
+      .sort((left, right) => Math.abs(right.residualPct) - Math.abs(left.residualPct) || right.actual - left.actual) ?? [];
+  const noveltyVolumeData = analytics?.noveltyTimelineDaily ?? [];
+  const noveltySeverityData = analytics?.noveltyTimelineDaily ?? [];
 
   return (
     <AppShell
@@ -127,20 +109,35 @@ export const AdvancedPage = () => {
           </div>
 
           <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <SectionCard title="Forecast Residual Trend" subtitle="Camera-level actual versus expected activity for the most deviant cameras in the current window.">
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <ComposedChart data={forecastTrendData}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                    <XAxis dataKey="label" stroke="#8ea6b1" minTickGap={24} />
-                    <YAxis yAxisId="left" stroke="#8ea6b1" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#8ea6b1" />
-                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="delta" fill="#59a8ff" radius={[8, 8, 0, 0]} name="Residual delta" />
-                    <Line yAxisId="right" type="monotone" dataKey="expected" stroke="#ffcf66" dot={false} strokeWidth={2} name="Expected" />
-                  </ComposedChart>
-                </ResponsiveContainer>
+            <SectionCard title="Forecast Residual Heatmap" subtitle="Residual percentage by camera and date, using real dates to show where activity is above or below expectation.">
+              <div className="overflow-auto">
+                <div className="grid min-w-max gap-2 text-xs" style={{ gridTemplateColumns: `220px repeat(${forecastDateColumns.length || 1}, minmax(74px, 1fr))` }}>
+                  <div />
+                  {forecastDateColumns.map((date) => (
+                    <div key={date} className="px-1 text-center text-slate-400">{date.slice(5)}</div>
+                  ))}
+                  {forecastLeaderNames.map((cameraName) => (
+                    <div key={cameraName} className="contents">
+                      <div className="pr-3 text-sm font-medium text-slate-300">{cameraName}</div>
+                      {forecastDateColumns.map((date) => {
+                        const item = forecastResidualLookup.get(`${cameraName}|||${date}`);
+                        return (
+                          <div
+                            key={`${cameraName}-${date}`}
+                            className={classNames("flex h-12 items-center justify-center rounded-xl border border-white/5 font-medium", residualCellClass(item?.residualPct ?? 0))}
+                            title={
+                              item
+                                ? `${cameraName} ${date}: actual ${formatNumber(item.actual)}, expected ${formatNumber(item.expected, 1)}, delta ${formatSignedNumber(item.delta, 1)}, residual ${formatSignedNumber(item.residualPct, 1)}%`
+                                : `${cameraName} ${date}: no forecast signal`
+                            }
+                          >
+                            {item ? `${formatSignedNumber(item.residualPct, 0)}%` : ""}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               </div>
             </SectionCard>
 
@@ -210,35 +207,81 @@ export const AdvancedPage = () => {
               </div>
             </SectionCard>
 
-            <SectionCard title="Novelty and Anomaly Timeline" subtitle="When advanced signals spike, with the strongest driver called out for quick interpretation.">
+            <SectionCard title="Forecast Surprise Ranking" subtitle="Current snapshot of the cameras furthest above or below expected volume, using residual percentage only.">
               <div className="h-80">
                 <ResponsiveContainer>
-                  <ComposedChart data={noveltyTrend}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                    <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={32} />
-                    <YAxis yAxisId="left" stroke="#8ea6b1" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#8ea6b1" />
-                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="novelEventCount" fill="#ffcf66" radius={[8, 8, 0, 0]} name="Novel event count" />
-                    <Line yAxisId="right" type="monotone" dataKey="avgAnomalyScore" stroke="#ff7c7c" dot={false} strokeWidth={2} name="Avg anomaly score" />
-                  </ComposedChart>
+                  <BarChart data={forecastSurpriseData} layout="vertical" margin={{ left: 20, right: 20 }}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
+                    <XAxis type="number" stroke="#8ea6b1" />
+                    <YAxis type="category" dataKey="cameraName" stroke="#8ea6b1" width={150} />
+                    <Tooltip
+                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
+                      formatter={(value: unknown) => (typeof value === "number" ? `${formatSignedNumber(value, 1)}%` : String(value ?? ""))}
+                      labelFormatter={(_, payload) => {
+                        const item = payload?.[0]?.payload;
+                        return item ? `${item.cameraName} • actual ${formatNumber(item.actual)} • expected ${formatNumber(item.expected, 1)}` : "";
+                      }}
+                    />
+                    <Bar dataKey="residualPct" radius={[0, 8, 8, 0]} name="Residual %">
+                      {forecastSurpriseData.map((item) => (
+                        <Cell key={item.cameraName} fill={item.residualPct >= 0 ? "#73e0ae" : "#ff7c7c"} />
+                      ))}
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {noveltyTrend.slice(-4).map((item) => (
-                  <div key={item.date} className="rounded-2xl bg-white/5 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.date}</div>
-                    <div className="mt-2 text-sm text-white">Novel events {formatNumber(item.novelEventCount)}</div>
-                    <div className="mt-1 text-sm text-slate-300">Avg anomaly {formatNumber(item.avgAnomalyScore, 1)}</div>
-                    <div className="mt-2 text-xs text-slate-400">{item.topDriver ?? "No standout novelty driver"}</div>
-                  </div>
-                ))}
               </div>
             </SectionCard>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+            <SectionCard title="Novelty Volume Timeline" subtitle="Daily count of novelty-qualified patterns across the full filtered date range.">
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <BarChart data={noveltyVolumeData}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                    <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={32} />
+                    <YAxis stroke="#8ea6b1" />
+                    <Tooltip
+                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
+                      formatter={(value: unknown) => (typeof value === "number" ? formatNumber(value, 0) : String(value ?? ""))}
+                      labelFormatter={(_, payload) => {
+                        const item = payload?.[0]?.payload;
+                        return item ? `${item.date} • ${item.topDriver ?? "No dominant driver"} • ${item.dominantCategory ? titleCase(item.dominantCategory) : "No dominant category"}` : "";
+                      }}
+                    />
+                    <Bar dataKey="noveltyCount" fill="#ffcf66" radius={[8, 8, 0, 0]} name="Novelty count" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Novelty Severity Timeline" subtitle="Daily novelty severity across the full filtered date range, distinguishing broad unusual behavior from isolated spikes.">
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <LineChart data={noveltySeverityData}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                    <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={32} />
+                    <YAxis stroke="#8ea6b1" />
+                    <Tooltip
+                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
+                      formatter={(value: unknown, name: unknown) => [
+                        typeof value === "number" ? formatNumber(value, 1) : String(value ?? ""),
+                        String(name ?? "")
+                      ]}
+                      labelFormatter={(_, payload) => {
+                        const item = payload?.[0]?.payload;
+                        return item ? `${item.date} • ${item.topDriver ?? "No dominant driver"}` : "";
+                      }}
+                    />
+                    <Line type="monotone" dataKey="avgNoveltyScore" stroke="#59a8ff" dot={false} strokeWidth={2} name="Avg novelty" />
+                    <Line type="monotone" dataKey="maxNoveltyScore" stroke="#ff7c7c" dot={false} strokeWidth={2} name="Max novelty" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </SectionCard>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-1">
             <SectionCard title="Category Shift Matrix" subtitle="Camera-category share movement against recent baseline, highlighting over- and under-indexing rather than raw volume.">
               <div className="overflow-auto">
                 <div className="grid min-w-max gap-2 text-xs" style={{ gridTemplateColumns: `220px repeat(${shiftColumns.length || 1}, minmax(92px, 1fr))` }}>
@@ -268,76 +311,6 @@ export const AdvancedPage = () => {
                     </div>
                   ))}
                 </div>
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Behavior Archetypes" subtitle="Behavioral segmentation of cameras using category mix, diversity, and anomaly context.">
-              <div className="space-y-3">
-                {analytics.cameraClusters.map((cluster) => (
-                  <div key={cluster.cameraName} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-white">{cluster.cameraName}</div>
-                        <div className="mt-1 text-sm text-slate-400">{cluster.cluster} • {titleCase(cluster.similarityLabel)}</div>
-                      </div>
-                      <StatusBadge status={cluster.anomalyScore >= 55 ? "alert" : cluster.anomalyScore >= 35 ? "warning" : "healthy"} />
-                    </div>
-                    <div className="mt-3 text-sm leading-6 text-slate-300">{cluster.rationale}</div>
-                  </div>
-                ))}
-              </div>
-            </SectionCard>
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-            <SectionCard title="Forecast Surprise by Camera" subtitle="Largest forecast deviations by camera in the current window.">
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <BarChart data={forecastSurpriseData} layout="vertical" margin={{ left: 20, right: 20 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
-                    <XAxis type="number" stroke="#8ea6b1" />
-                    <YAxis type="category" dataKey="cameraName" stroke="#8ea6b1" width={150} />
-                    <Tooltip
-                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
-                      formatter={(value: unknown, name: unknown) => [
-                        typeof value === "number"
-                          ? `${formatSignedNumber(value, 1)}${name === "Residual %" ? "%" : ""}`
-                          : String(value ?? ""),
-                        String(name ?? "")
-                      ]}
-                    />
-                    <Legend />
-                    <Bar dataKey="delta" fill="#59a8ff" radius={[0, 8, 8, 0]} name="Delta" />
-                    <Bar dataKey="residualPct" fill="#73e0ae" radius={[0, 8, 8, 0]} name="Residual %" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Novelty Mix by Category" subtitle="Which categories are driving the most unusual activity right now.">
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <BarChart data={noveltyMixByCategory}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                    <XAxis dataKey="category" stroke="#8ea6b1" />
-                    <YAxis yAxisId="left" stroke="#8ea6b1" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#8ea6b1" />
-                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="currentCount" fill="#ffcf66" radius={[8, 8, 0, 0]} name="Recent count" />
-                    <Bar yAxisId="right" dataKey="avgNoveltyScore" fill="#ff7c7c" radius={[8, 8, 0, 0]} name="Avg novelty score" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                {noveltyMixByCategory.slice(0, 3).map((item) => (
-                  <div key={item.category} className="rounded-2xl bg-white/5 p-4">
-                    <div className="text-sm font-medium text-white">{item.category}</div>
-                    <div className="mt-2 text-xs text-slate-400">Recent count {formatNumber(item.currentCount)}</div>
-                    <div className="mt-1 text-xs text-slate-400">Avg novelty {formatNumber(item.avgNoveltyScore, 1)}</div>
-                    <div className="mt-1 text-xs text-slate-400">High-novelty patterns {formatNumber(item.highNoveltyCount)}</div>
-                  </div>
-                ))}
               </div>
             </SectionCard>
           </div>

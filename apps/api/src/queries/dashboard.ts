@@ -30,6 +30,7 @@ import type {
   LightSplitPoint,
   MonthlyActivityCategoryPoint,
   NovelEventPoint,
+  NoveltyTimelinePoint,
   OverviewResponse,
   ProcessingFunnelPoint,
   StaleCameraPoint,
@@ -1175,6 +1176,101 @@ const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: Cate
   return { novelEvents, noveltyByDate };
 };
 
+const buildNoveltyTimelineDaily = (rows: ComboDailyAggregate[], categoryShiftMatrix: CategoryShiftPoint[]): NoveltyTimelinePoint[] => {
+  const { sortedDates, baselineDateSet } = buildAnalysisWindows(rows.map((row) => row.date));
+  const baselineDayCount = Math.max(baselineDateSet.size, 1);
+  const comboTotals = new Map<string, number>();
+  const categoryHourTotals = new Map<string, number>();
+  const baselineComboCounts = new Map<string, number>();
+  const shiftByPair = new Map(categoryShiftMatrix.map((item) => [`${item.cameraName}|||${item.category}`, item]));
+  const rowsByDate = new Map<string, ComboDailyAggregate[]>();
+
+  rows.forEach((row) => {
+    const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
+    const categoryHourKey = `${row.category}|||${row.hour}`;
+    comboTotals.set(comboKey, (comboTotals.get(comboKey) ?? 0) + row.count);
+    categoryHourTotals.set(categoryHourKey, (categoryHourTotals.get(categoryHourKey) ?? 0) + row.count);
+    rowsByDate.set(row.date, [...(rowsByDate.get(row.date) ?? []), row]);
+
+    if (baselineDateSet.has(row.date)) {
+      baselineComboCounts.set(comboKey, (baselineComboCounts.get(comboKey) ?? 0) + row.count);
+    }
+  });
+
+  const maxComboCount = Math.max(...comboTotals.values(), 1);
+  const maxCategoryHourCount = Math.max(...categoryHourTotals.values(), 1);
+
+  return sortedDates.map((date) => {
+    const dateRows = rowsByDate.get(date) ?? [];
+    let noveltyCount = 0;
+    let noveltyScoreTotal = 0;
+    let maxNoveltyScore = 0;
+    let topDriver: string | null = null;
+    let dominantCategory: string | null = null;
+    let topDriverScore = -1;
+    const categoryContribution = new Map<string, number>();
+
+    dateRows.forEach((row) => {
+      const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
+      const comboCount = comboTotals.get(comboKey) ?? row.count;
+      const categoryHourCount = categoryHourTotals.get(`${row.category}|||${row.hour}`) ?? row.count;
+      const baselineDailyAvg = roundNumber((baselineComboCounts.get(comboKey) ?? 0) / baselineDayCount, 2);
+      const pairShift = shiftByPair.get(`${row.cameraName}|||${row.category}`)?.shiftPct ?? 0;
+      const comboRarity = 1 - comboCount / maxComboCount;
+      const categoryHourRarity = 1 - categoryHourCount / maxCategoryHourCount;
+      const deviation = Math.max(0, row.count - baselineDailyAvg);
+      const deviationScore = Math.min(1, deviation / Math.max(baselineDailyAvg, 1));
+      const shiftScore = Math.min(1, Math.max(0, pairShift) / 25);
+      const noveltyScore = roundNumber(100 * (0.45 * comboRarity + 0.25 * categoryHourRarity + 0.2 * deviationScore + 0.1 * shiftScore), 1);
+
+      if (noveltyScore < 55) {
+        return;
+      }
+
+      noveltyCount += row.count;
+      noveltyScoreTotal += noveltyScore;
+      categoryContribution.set(row.category, (categoryContribution.get(row.category) ?? 0) + row.count);
+
+      if (noveltyScore > maxNoveltyScore) {
+        maxNoveltyScore = noveltyScore;
+      }
+
+      if (noveltyScore > topDriverScore) {
+        topDriverScore = noveltyScore;
+        topDriver = `${row.cameraName} ${row.category} @ ${row.hour.toString().padStart(2, "0")}:00`;
+      }
+    });
+
+    if (categoryContribution.size > 0) {
+      dominantCategory = Array.from(categoryContribution.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] ?? null;
+    }
+
+    const qualifiedPatterns = dateRows.filter((row) => {
+      const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
+      const comboCount = comboTotals.get(comboKey) ?? row.count;
+      const categoryHourCount = categoryHourTotals.get(`${row.category}|||${row.hour}`) ?? row.count;
+      const baselineDailyAvg = roundNumber((baselineComboCounts.get(comboKey) ?? 0) / baselineDayCount, 2);
+      const pairShift = shiftByPair.get(`${row.cameraName}|||${row.category}`)?.shiftPct ?? 0;
+      const comboRarity = 1 - comboCount / maxComboCount;
+      const categoryHourRarity = 1 - categoryHourCount / maxCategoryHourCount;
+      const deviation = Math.max(0, row.count - baselineDailyAvg);
+      const deviationScore = Math.min(1, deviation / Math.max(baselineDailyAvg, 1));
+      const shiftScore = Math.min(1, Math.max(0, pairShift) / 25);
+      const noveltyScore = roundNumber(100 * (0.45 * comboRarity + 0.25 * categoryHourRarity + 0.2 * deviationScore + 0.1 * shiftScore), 1);
+      return noveltyScore >= 55;
+    }).length;
+
+    return {
+      date,
+      noveltyCount,
+      avgNoveltyScore: qualifiedPatterns > 0 ? roundNumber(noveltyScoreTotal / qualifiedPatterns, 1) : 0,
+      maxNoveltyScore: roundNumber(maxNoveltyScore, 1),
+      topDriver,
+      dominantCategory
+    };
+  });
+};
+
 const buildAdvancedInsights = (leaders: CameraForecastLeader[], novelEvents: NovelEventPoint[], shifts: CategoryShiftPoint[]) => {
   const insights: InsightItem[] = [];
   const positiveLeader = leaders.filter((item) => item.delta > 0).sort((left, right) => right.delta - left.delta)[0];
@@ -1450,6 +1546,7 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
   const { cameraForecast, cameraForecastLeaders } = buildCameraForecast(cameraDailyResult.rows as CameraDailyAggregate[]);
   const categoryShiftMatrix = buildCategoryShiftMatrix(comboDailyResult.rows as ComboDailyAggregate[]);
   const { novelEvents, noveltyByDate } = buildNovelEvents(comboDailyResult.rows as ComboDailyAggregate[], categoryShiftMatrix);
+  const noveltyTimelineDaily = buildNoveltyTimelineDaily(comboDailyResult.rows as ComboDailyAggregate[], categoryShiftMatrix);
 
   const cameraAnomalies: CameraAnomalyPoint[] = cameraAnomaliesRaw.rows.map((row) => {
     const health = computeCameraHealth({
@@ -1536,6 +1633,7 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
     cameraForecast,
     cameraForecastLeaders,
     novelEvents,
+    noveltyTimelineDaily,
     categoryShiftMatrix,
     advancedInsights,
     cameraClusters: buildCameraClusters(diversityByCamera, cameraAnomalies),
