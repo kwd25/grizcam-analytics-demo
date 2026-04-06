@@ -1159,7 +1159,7 @@ const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: Cate
   recentRowsByDate.forEach((dateRows, date) => {
     dateRows.forEach((row) => {
       const novel = noveltyByCombo.get(`${row.cameraName}|||${row.category}|||${row.hour}`);
-      if (!novel || novel.noveltyScore < 55) {
+      if (!novel || novel.noveltyScore < 70) {
         return;
       }
 
@@ -1223,7 +1223,7 @@ const buildNoveltyTimelineDaily = (rows: ComboDailyAggregate[], categoryShiftMat
       const shiftScore = Math.min(1, Math.max(0, pairShift) / 25);
       const noveltyScore = roundNumber(100 * (0.45 * comboRarity + 0.25 * categoryHourRarity + 0.2 * deviationScore + 0.1 * shiftScore), 1);
 
-      if (noveltyScore < 55) {
+      if (noveltyScore < 70) {
         return;
       }
 
@@ -1257,7 +1257,7 @@ const buildNoveltyTimelineDaily = (rows: ComboDailyAggregate[], categoryShiftMat
       const deviationScore = Math.min(1, deviation / Math.max(baselineDailyAvg, 1));
       const shiftScore = Math.min(1, Math.max(0, pairShift) / 25);
       const noveltyScore = roundNumber(100 * (0.45 * comboRarity + 0.25 * categoryHourRarity + 0.2 * deviationScore + 0.1 * shiftScore), 1);
-      return noveltyScore >= 55;
+      return noveltyScore >= 70;
     }).length;
 
     return {
