@@ -110,8 +110,6 @@ export const getFilterOptions = async (): Promise<FilterOptionsResponse> => {
 
 const filteredEventsCte = (filters: DashboardFilters, alias = "e") => {
   const filter = buildFilterClause(filters, alias);
-  const normalizedEventSqlText = normalizedEventSql("base");
-  const normalizedTimestampSqlText = normalizedTimestampSql("base");
 
   const text = `
     with filtered as (
@@ -195,7 +193,7 @@ const filteredEventsCte = (filters: DashboardFilters, alias = "e") => {
     ),
     event_groups as (
       select
-        ${normalizedEventSqlText} as event_group,
+        base.event_group as event_group,
         min(camera_name) as camera_name,
         min(mac) as mac,
         min(local_timestamp) as first_seen,
