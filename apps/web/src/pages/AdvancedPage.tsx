@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AppShell } from "../components/AppShell";
 import { FilterBar } from "../components/FilterBar";
 import { SectionCard } from "../components/SectionCard";
@@ -78,18 +78,7 @@ export const AdvancedPage = () => {
   const shiftLookup = new Map(
     analytics?.categoryShiftMatrix.slice(0, 24).map((item) => [`${item.cameraName}|||${item.category}`, item]) ?? []
   );
-  const forecastSurpriseData =
-    analytics?.cameraForecastLeaders
-      .map((item) => ({
-        cameraName: item.cameraName,
-        residualPct: item.residualPct,
-        actual: item.actual,
-        expected: item.expected,
-        delta: item.delta
-      }))
-      .sort((left, right) => Math.abs(right.residualPct) - Math.abs(left.residualPct) || right.actual - left.actual) ?? [];
   const noveltyVolumeData = analytics?.noveltyTimelineDaily ?? [];
-  const noveltySeverityData = analytics?.noveltyTimelineDaily ?? [];
 
   return (
     <AppShell
@@ -169,7 +158,7 @@ export const AdvancedPage = () => {
             </SectionCard>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <div className="grid gap-4 xl:grid-cols-1">
             <SectionCard title="Novel Events" subtitle="Rare camera-category-time combinations weighted toward uncommon pairings and baseline deviation.">
               <div className="overflow-auto rounded-2xl border border-white/10">
                 <table className="min-w-full text-left text-sm">
@@ -206,34 +195,9 @@ export const AdvancedPage = () => {
                 ))}
               </div>
             </SectionCard>
-
-            <SectionCard title="Forecast Surprise Ranking" subtitle="Current snapshot of the cameras furthest above or below expected volume, using residual percentage only.">
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <BarChart data={forecastSurpriseData} layout="vertical" margin={{ left: 20, right: 20 }}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
-                    <XAxis type="number" stroke="#8ea6b1" />
-                    <YAxis type="category" dataKey="cameraName" stroke="#8ea6b1" width={150} />
-                    <Tooltip
-                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
-                      formatter={(value: unknown) => (typeof value === "number" ? `${formatSignedNumber(value, 1)}%` : String(value ?? ""))}
-                      labelFormatter={(_, payload) => {
-                        const item = payload?.[0]?.payload;
-                        return item ? `${item.cameraName} • actual ${formatNumber(item.actual)} • expected ${formatNumber(item.expected, 1)}` : "";
-                      }}
-                    />
-                    <Bar dataKey="residualPct" radius={[0, 8, 8, 0]} name="Residual %">
-                      {forecastSurpriseData.map((item) => (
-                        <Cell key={item.cameraName} fill={item.residualPct >= 0 ? "#73e0ae" : "#ff7c7c"} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </SectionCard>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <div className="grid gap-4 xl:grid-cols-1">
             <SectionCard title="Novelty Volume Timeline" subtitle="Daily count of novelty-qualified patterns across the full filtered date range.">
               <div className="h-80">
                 <ResponsiveContainer>
@@ -251,31 +215,6 @@ export const AdvancedPage = () => {
                     />
                     <Bar dataKey="noveltyCount" fill="#ffcf66" radius={[8, 8, 0, 0]} name="Novelty count" />
                   </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Novelty Severity Timeline" subtitle="Daily novelty severity across the full filtered date range, distinguishing broad unusual behavior from isolated spikes.">
-              <div className="h-80">
-                <ResponsiveContainer>
-                  <LineChart data={noveltySeverityData}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                    <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={32} />
-                    <YAxis stroke="#8ea6b1" />
-                    <Tooltip
-                      contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
-                      formatter={(value: unknown, name: unknown) => [
-                        typeof value === "number" ? formatNumber(value, 1) : String(value ?? ""),
-                        String(name ?? "")
-                      ]}
-                      labelFormatter={(_, payload) => {
-                        const item = payload?.[0]?.payload;
-                        return item ? `${item.date} • ${item.topDriver ?? "No dominant driver"}` : "";
-                      }}
-                    />
-                    <Line type="monotone" dataKey="avgNoveltyScore" stroke="#59a8ff" dot={false} strokeWidth={2} name="Avg novelty" />
-                    <Line type="monotone" dataKey="maxNoveltyScore" stroke="#ff7c7c" dot={false} strokeWidth={2} name="Max novelty" />
-                  </LineChart>
                 </ResponsiveContainer>
               </div>
             </SectionCard>
