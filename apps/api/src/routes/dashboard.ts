@@ -11,8 +11,10 @@ import {
   getFilterOptions,
   getHourlyHeatmap,
   getKpis,
+  getOverview,
   getMonthlyActivityByCategory,
   getSubjectByCamera,
+  getAnalyticsLab,
   getTimeOfDayComposition
 } from "../queries/dashboard.js";
 import { parseEventQuery, parseFilters } from "../utils/requests.js";
@@ -62,6 +64,14 @@ dashboardRouter.get("/charts/monthly-activity-by-category", async (request, resp
 
 dashboardRouter.get("/charts/composition", async (request, response) => {
   response.json(await getComposition(parseFilters(request.query as Record<string, unknown>)));
+});
+
+dashboardRouter.get("/overview", async (request, response) => {
+  response.json(await getOverview(parseFilters(request.query as Record<string, unknown>)));
+});
+
+dashboardRouter.get("/analytics-lab", async (request, response) => {
+  response.json(await getAnalyticsLab(parseFilters(request.query as Record<string, unknown>)));
 });
 
 dashboardRouter.get("/day/:date/summary", async (request, response) => {
