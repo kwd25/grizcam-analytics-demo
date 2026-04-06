@@ -454,6 +454,15 @@ export type NovelEventPoint = {
   narrative: string;
 };
 
+export type NoveltyTimelinePoint = {
+  date: string;
+  noveltyCount: number;
+  avgNoveltyScore: number;
+  maxNoveltyScore: number;
+  topDriver: string | null;
+  dominantCategory: string | null;
+};
+
 export type CategoryShiftPoint = {
   cameraName: string;
   category: string;
@@ -507,6 +516,7 @@ export type AnalyticsLabResponse = {
   cameraForecast: CameraForecastPoint[];
   cameraForecastLeaders: CameraForecastLeader[];
   novelEvents: NovelEventPoint[];
+  noveltyTimelineDaily: NoveltyTimelinePoint[];
   categoryShiftMatrix: CategoryShiftPoint[];
   advancedInsights: InsightItem[];
   cameraClusters: CameraClusterPoint[];
