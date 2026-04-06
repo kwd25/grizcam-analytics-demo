@@ -2,14 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   ComposedChart,
-  Cell,
   Legend,
   Line,
   ResponsiveContainer,
-  Scatter,
-  ScatterChart,
   Tooltip,
   XAxis,
   YAxis
@@ -22,7 +20,6 @@ import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import {
   classNames,
-  formatDurationShort,
   formatNumber,
   formatSignedNumber,
   titleCase
@@ -79,12 +76,43 @@ export const AdvancedPage = () => {
     analytics?.categoryShiftMatrix.slice(0, 24).map((item) => [`${item.cameraName}|||${item.category}`, item]) ?? []
   );
   const noveltyTrend = analytics?.anomalyTimeline ?? [];
-  const topCameraRisks = [...(analytics?.cameraAnomalies ?? [])].sort((left, right) => right.anomalyScore - left.anomalyScore).slice(0, 4);
+  const forecastSurpriseData =
+    analytics?.cameraForecastLeaders.map((item) => ({
+      cameraName: item.cameraName,
+      delta: item.delta,
+      residualPct: item.residualPct
+    })) ?? [];
+  const noveltyMixByCategory = Array.from(
+    (analytics?.novelEvents ?? []).reduce((accumulator, item) => {
+      const current = accumulator.get(item.category) ?? {
+        category: item.category,
+        currentCount: 0,
+        noveltyScoreTotal: 0,
+        highNoveltyCount: 0,
+        itemCount: 0
+      };
+
+      current.currentCount += item.currentCount;
+      current.noveltyScoreTotal += item.noveltyScore;
+      current.highNoveltyCount += item.noveltyScore >= 70 ? 1 : 0;
+      current.itemCount += 1;
+      accumulator.set(item.category, current);
+      return accumulator;
+    }, new Map<string, { category: string; currentCount: number; noveltyScoreTotal: number; highNoveltyCount: number; itemCount: number }>())
+      .values()
+  )
+    .map((item) => ({
+      category: titleCase(item.category),
+      currentCount: item.currentCount,
+      avgNoveltyScore: item.itemCount > 0 ? Number((item.noveltyScoreTotal / item.itemCount).toFixed(1)) : 0,
+      highNoveltyCount: item.highNoveltyCount
+    }))
+    .sort((left, right) => right.avgNoveltyScore - left.avgNoveltyScore || right.currentCount - left.currentCount);
 
   return (
     <AppShell
       title="Advanced"
-      subtitle="Research-oriented analytics for camera-level forecasting, novel pattern detection, category shift analysis, and readiness diagnostics."
+      subtitle="Advanced analytics for camera-level forecasting, novel pattern detection, and category shift analysis."
       badge={`${appEnv.demoLabel} • Advanced views`}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={patchFilters} onReset={resetFilters} />}
     >
@@ -262,93 +290,54 @@ export const AdvancedPage = () => {
           </div>
 
           <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-            <SectionCard title="Camera Risk Landscape" subtitle="Condensed camera-level risk view, distinct from Ops health reporting, blending anomaly, latency, and diversity context.">
+            <SectionCard title="Forecast Surprise by Camera" subtitle="Largest forecast deviations by camera in the current window.">
               <div className="h-80">
                 <ResponsiveContainer>
-                  <ScatterChart>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" />
-                    <XAxis dataKey="healthScore" stroke="#8ea6b1" name="Health" />
-                    <YAxis dataKey="anomalyScore" stroke="#8ea6b1" name="Anomaly" />
+                  <BarChart data={forecastSurpriseData} layout="vertical" margin={{ left: 20, right: 20 }}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" horizontal={false} />
+                    <XAxis type="number" stroke="#8ea6b1" />
+                    <YAxis type="category" dataKey="cameraName" stroke="#8ea6b1" width={150} />
                     <Tooltip
-                      cursor={{ strokeDasharray: "3 3" }}
                       contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
-                      formatter={(value: unknown) => (typeof value === "number" ? formatNumber(value, 1) : String(value ?? ""))}
-                      labelFormatter={(_, payload) => String(payload?.[0]?.payload?.cameraName ?? "")}
+                      formatter={(value: unknown, name: unknown) => [
+                        typeof value === "number"
+                          ? `${formatSignedNumber(value, 1)}${name === "Residual %" ? "%" : ""}`
+                          : String(value ?? ""),
+                        String(name ?? "")
+                      ]}
                     />
-                    <Scatter data={analytics.cameraAnomalies} fill="#59a8ff">
-                      {analytics.cameraAnomalies.map((item) => (
-                        <Cell key={item.cameraName} fill={item.status === "alert" ? "#ff7c7c" : item.status === "warning" ? "#ffcf66" : "#73e0ae"} />
-                      ))}
-                    </Scatter>
-                  </ScatterChart>
+                    <Legend />
+                    <Bar dataKey="delta" fill="#59a8ff" radius={[0, 8, 8, 0]} name="Delta" />
+                    <Bar dataKey="residualPct" fill="#73e0ae" radius={[0, 8, 8, 0]} name="Residual %" />
+                  </BarChart>
                 </ResponsiveContainer>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {topCameraRisks.map((row) => (
-                  <div key={`${row.cameraName}-risk`} className="rounded-2xl bg-white/5 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-white">{row.cameraName}</div>
-                      <StatusBadge status={row.status} />
-                    </div>
-                    <div className="mt-2 text-xs text-slate-400">Anomaly {formatNumber(row.anomalyScore)} • Lag {formatDurationShort(row.avgLagSeconds)}</div>
-                    <div className="mt-1 text-xs text-slate-400">Low voltage rate {formatNumber(row.lowVoltageRatePct, 1)}%</div>
-                  </div>
-                ))}
               </div>
             </SectionCard>
 
-            <SectionCard title="Readiness Diagnostics" subtitle="Secondary checks for model-readiness and feed quality after the core advanced behavior story.">
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-2xl bg-white/5 p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Parse Success</div>
-                  <div className="mt-2 text-2xl font-semibold text-white">{formatNumber(analytics.dataQuality.parseSuccessPct, 1)}%</div>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Missing Analysis Rate</div>
-                  <div className="mt-2 text-2xl font-semibold text-white">{formatNumber(analytics.dataQuality.missingAnalysisRatePct, 1)}%</div>
-                </div>
+            <SectionCard title="Novelty Mix by Category" subtitle="Which categories are driving the most unusual activity right now.">
+              <div className="h-80">
+                <ResponsiveContainer>
+                  <BarChart data={noveltyMixByCategory}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+                    <XAxis dataKey="category" stroke="#8ea6b1" />
+                    <YAxis yAxisId="left" stroke="#8ea6b1" />
+                    <YAxis yAxisId="right" orientation="right" stroke="#8ea6b1" />
+                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="currentCount" fill="#ffcf66" radius={[8, 8, 0, 0]} name="Recent count" />
+                    <Bar yAxisId="right" dataKey="avgNoveltyScore" fill="#ff7c7c" radius={[8, 8, 0, 0]} name="Avg novelty score" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-              <div className="mt-4 rounded-2xl border border-white/10">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="bg-slate-950/90 text-slate-400">
-                    <tr>
-                      <th className="px-3 py-3">Field</th>
-                      <th className="px-3 py-3">Completeness</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analytics.dataQuality.fieldCompleteness.map((item) => (
-                      <tr key={item.field} className="border-t border-white/5 text-slate-200">
-                        <td className="px-3 py-3">{titleCase(item.field)}</td>
-                        <td className="px-3 py-3">{formatNumber(item.completenessPct, 1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-2xl bg-white/5 p-4">
-                  <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Suspicious Values</div>
-                  <div className="space-y-2">
-                    {analytics.dataQuality.suspiciousValueCounts.map((item) => (
-                      <div key={item.label} className="flex items-center justify-between text-sm text-slate-200">
-                        <span>{item.label}</span>
-                        <span>{formatNumber(item.count)}</span>
-                      </div>
-                    ))}
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {noveltyMixByCategory.slice(0, 3).map((item) => (
+                  <div key={item.category} className="rounded-2xl bg-white/5 p-4">
+                    <div className="text-sm font-medium text-white">{item.category}</div>
+                    <div className="mt-2 text-xs text-slate-400">Recent count {formatNumber(item.currentCount)}</div>
+                    <div className="mt-1 text-xs text-slate-400">Avg novelty {formatNumber(item.avgNoveltyScore, 1)}</div>
+                    <div className="mt-1 text-xs text-slate-400">High-novelty patterns {formatNumber(item.highNoveltyCount)}</div>
                   </div>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-4">
-                  <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">Consistency Checks</div>
-                  <div className="space-y-2">
-                    {analytics.dataQuality.pipelineConsistency.map((item) => (
-                      <div key={item.label} className="flex items-center justify-between text-sm text-slate-200">
-                        <span>{item.label}</span>
-                        <span>{formatNumber(item.count)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                ))}
               </div>
             </SectionCard>
           </div>
