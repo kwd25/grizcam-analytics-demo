@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { CameraHealthRow, ProcessingFunnelPoint } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { CameraHealthTable } from "../components/CameraHealthTable";
@@ -8,14 +8,12 @@ import { FilterBar } from "../components/FilterBar";
 import { NotableEventsList } from "../components/NotableEventsList";
 import { OpsKpiStrip } from "../components/OpsKpiStrip";
 import { SectionCard } from "../components/SectionCard";
-import { StatusBadge } from "../components/StatusBadge";
 import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import {
-  formatDurationShort,
-  formatEventTimestamp,
   formatNumber,
-  formatPercent
+  formatPercent,
+  formatNullableNumber
 } from "../lib/utils";
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
 
@@ -77,22 +75,14 @@ export const OpsPage = () => {
     };
   }, [overview]);
 
-  const topRiskCameras = useMemo(() => {
+  const lowestVoltageCameras = useMemo(() => {
     if (!overview) {
       return [];
     }
 
-    const riskScore = (camera: CameraHealthRow) => {
-      const staleHours = camera.lastSeenHoursAgo ?? 0;
-      const processingLagHours = (camera.avgProcessingLagSeconds ?? 0) / 3600;
-      const voltageGap = camera.avgVoltage !== null && camera.avgVoltage < 11.5 ? (11.5 - camera.avgVoltage) * 20 : 0;
-      const statusPenalty = camera.status === "alert" ? 18 : camera.status === "warning" ? 8 : 0;
-      return staleHours * 0.9 + processingLagHours * 6 + voltageGap + statusPenalty;
-    };
-
     return [...overview.cameraHealth]
-      .map((camera) => ({ ...camera, riskScore: Math.round(riskScore(camera)) }))
-      .sort((a, b) => b.riskScore - a.riskScore)
+      .filter((camera) => camera.avgVoltage !== null)
+      .sort((a, b) => (a.avgVoltage ?? Number.POSITIVE_INFINITY) - (b.avgVoltage ?? Number.POSITIVE_INFINITY))
       .slice(0, 5);
   }, [overview]);
 
@@ -154,69 +144,9 @@ export const OpsPage = () => {
         <QueryState error={overviewQuery.error as Error | null} />
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-        {overview ? <CameraHealthTable rows={overview.cameraHealth} /> : <QueryState error={overviewQuery.error as Error | null} />}
-
-        {overview ? (
-          <div className="space-y-4">
-            <SectionCard title="Needs Attention" subtitle="Fast triage list for stale or degraded cameras in the current slice.">
-              <div className="space-y-3">
-                {overview.staleCameras.length === 0 ? (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-emerald-200">No stale or unhealthy cameras in the current slice.</div>
-                ) : (
-                  overview.staleCameras.map((camera) => (
-                    <div key={camera.cameraName} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="font-medium text-white">{camera.cameraName}</div>
-                          <div className="mt-1 text-sm text-slate-400">
-                            Last seen {formatEventTimestamp(camera.lastSeen)} • {formatDurationShort((camera.lastSeenHoursAgo ?? 0) * 3600)} ago
-                          </div>
-                        </div>
-                        <StatusBadge status={camera.status} />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </SectionCard>
-          </div>
-        ) : (
-          <QueryState error={overviewQuery.error as Error | null} />
-        )}
-      </div>
+      {overview ? <CameraHealthTable rows={overview.cameraHealth} /> : <QueryState error={overviewQuery.error as Error | null} />}
 
       <div className="grid gap-4 xl:grid-cols-2">
-        {overview ? (
-          <SectionCard title="Pipeline Lag Trend" subtitle="Primary bottleneck view for upload, AI, and end-to-end processing delay.">
-            <div className="h-72">
-              <ResponsiveContainer>
-                <LineChart data={overview.lagTrend}>
-                  <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                  <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={36} />
-                  <YAxis stroke="#8ea6b1" />
-                  <Tooltip
-                    contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }}
-                    formatter={(value: unknown) =>
-                      typeof value === "number"
-                        ? formatDurationShort(value)
-                        : Array.isArray(value)
-                          ? value.join(", ")
-                          : String(value ?? "")
-                    }
-                  />
-                  <Legend />
-                  <Line type="monotone" dataKey="avgUploadLagSeconds" stroke="#ffcf66" dot={false} strokeWidth={2} name="Upload lag" />
-                  <Line type="monotone" dataKey="avgAiLagSeconds" stroke="#59a8ff" dot={false} strokeWidth={2} name="AI lag" />
-                  <Line type="monotone" dataKey="avgProcessingLagSeconds" stroke="#73e0ae" dot={false} strokeWidth={2} name="Processing lag" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </SectionCard>
-        ) : (
-          <QueryState error={overviewQuery.error as Error | null} />
-        )}
-
         {overview ? (
           <SectionCard title="Pipeline Funnel" subtitle="Grouped events moving from upload through JSON extraction and AI analysis.">
             <div className="h-72">
@@ -234,28 +164,35 @@ export const OpsPage = () => {
         ) : (
           <QueryState error={overviewQuery.error as Error | null} />
         )}
-      </div>
 
-      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         {overview ? (
-          <SectionCard title="Top Risk Cameras" subtitle="Ranked by stale reporting, processing lag, low voltage, and current status severity.">
-            <div className="space-y-3">
-              {topRiskCameras.map((camera) => (
-                <div key={camera.cameraName} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-white">{camera.cameraName}</div>
-                      <div className="mt-1 text-sm text-slate-400">
-                        Stale {formatDurationShort((camera.lastSeenHoursAgo ?? 0) * 3600)} • Lag {formatDurationShort(camera.avgProcessingLagSeconds)} • Voltage{" "}
-                        {camera.avgVoltage?.toFixed(2) ?? "N/A"}v
-                      </div>
-                      {camera.alertReason ? <div className="mt-2 text-xs text-slate-500">{camera.alertReason}</div> : null}
-                    </div>
-                    <div className="text-right">
-                      <StatusBadge status={camera.status} />
-                      <div className="mt-2 text-sm font-semibold text-amber-300">Risk {formatNumber(camera.riskScore)}</div>
-                    </div>
+          <SectionCard title="Telemetry Snapshot" subtitle="Power diagnostics without the hard-to-read line chart.">
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Avg Voltage</div>
+                <div className="mt-3 text-3xl font-semibold text-white">{formatNullableNumber(overview.kpis.avgVoltage, 2, "v")}</div>
+              </div>
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Under 11.5v</div>
+                <div className="mt-3 text-3xl font-semibold text-amber-300">
+                  {formatNumber(overview.cameraHealth.filter((camera) => (camera.avgVoltage ?? Number.POSITIVE_INFINITY) < 11.5).length)}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Lowest Voltage</div>
+                <div className="mt-3 text-3xl font-semibold text-rose-300">
+                  {lowestVoltageCameras[0]?.avgVoltage?.toFixed(2) ?? "N/A"}v
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {lowestVoltageCameras.map((camera) => (
+                <div key={camera.cameraName} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                  <div>
+                    <div className="font-medium text-white">{camera.cameraName}</div>
+                    <div className="mt-1 text-sm text-slate-400">{camera.alertReason ?? "Power reading available in current slice."}</div>
                   </div>
+                  <div className="text-lg font-semibold text-white">{formatNullableNumber(camera.avgVoltage, 2, "v")}</div>
                 </div>
               ))}
             </div>
@@ -263,46 +200,15 @@ export const OpsPage = () => {
         ) : (
           <QueryState error={overviewQuery.error as Error | null} />
         )}
+      </div>
 
+      <div className="grid gap-4 xl:grid-cols-1">
         {overview ? (
           <NotableEventsList
             rows={overview.notableEvents}
             title="Operational Outliers"
             subtitle="Recent events with elevated lag, degraded status, or other operator-relevant signals."
           />
-        ) : (
-          <QueryState error={overviewQuery.error as Error | null} />
-        )}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-1">
-        {overview ? (
-          <SectionCard title="Telemetry Snapshot" subtitle="Power signals only, kept lightweight for diagnosis rather than exploration.">
-            <div className="grid gap-4">
-              <div className="h-40">
-                <ResponsiveContainer>
-                  <LineChart data={overview.voltageTrend}>
-                    <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
-                    <XAxis dataKey="date" stroke="#8ea6b1" minTickGap={36} />
-                    <YAxis stroke="#8ea6b1" />
-                    <Tooltip contentStyle={{ background: "#102028", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16 }} />
-                    <Legend />
-                    {Array.from(new Set(overview.voltageTrend.map((point) => point.cameraName))).slice(0, 5).map((cameraName, index) => (
-                      <Line
-                        key={cameraName}
-                        dataKey={(row) => (row.cameraName === cameraName ? row.avgVoltage : null)}
-                        name={cameraName}
-                        type="monotone"
-                        stroke={["#73e0ae", "#59a8ff", "#ffcf66", "#ff7c7c", "#6ee7f9"][index % 5]}
-                        dot={false}
-                        strokeWidth={1.8}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </SectionCard>
         ) : (
           <QueryState error={overviewQuery.error as Error | null} />
         )}
