@@ -1,7 +1,7 @@
 import type { EventQuery, EventsResponse } from "@grizcam/shared";
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { formatNumber, titleCase } from "../lib/utils";
+import { formatEventTimestamp, formatNumber, titleCase } from "../lib/utils";
 import { SectionCard } from "./SectionCard";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 
@@ -104,7 +104,7 @@ export const EventTable = ({ data, isLoading, query, onQueryChange, exportUrl }:
                     className="cursor-pointer border-t border-white/5 text-slate-200 hover:bg-white/5"
                     onClick={() => setExpandedRowId(expandedRowId === row.id ? null : row.id)}
                   >
-                    <td className="px-3 py-3">{row.timestamp.slice(0, 16).replace("T", " ")}</td>
+                    <td className="px-3 py-3">{formatEventTimestamp(row.timestamp)}</td>
                     <td className="px-3 py-3">{row.cameraName}</td>
                     <td className="px-3 py-3">{row.event}</td>
                     <td className="px-3 py-3">{formatNumber(row.sequence)}</td>

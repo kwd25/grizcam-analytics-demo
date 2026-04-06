@@ -13,7 +13,21 @@ import type {
   TimeOfDayCompositionPoint
 } from "@grizcam/shared";
 import { pool } from "../db.js";
-import { buildFilterClause, getEventOrderBy, mapEventRow } from "../utils/sql.js";
+import {
+  buildFilterClause,
+  getEventOrderBy,
+  mapEventRow,
+  normalizedAnalysisSummarySql,
+  normalizedAnalysisTitleSql,
+  normalizedBatteryPercentageSql,
+  normalizedCameraNameSql,
+  normalizedEventSql,
+  normalizedHeatLevelSql,
+  normalizedSubjectCategorySql,
+  normalizedSubjectClassSql,
+  normalizedTimeOfDayBucketSql,
+  normalizedTimestampSql
+} from "../utils/sql.js";
 
 export const getDevices = async () => {
   const result = await pool.query(
@@ -28,18 +42,18 @@ export const getFilterOptions = async (): Promise<FilterOptionsResponse> => {
   const [cameras, macs, timeBuckets, categories, classes, ranges] = await Promise.all([
     pool.query(`select distinct camera_name from dim_devices order by camera_name asc`),
     pool.query(`select mac, camera_name from dim_devices order by camera_name asc`),
-    pool.query(`select distinct time_of_day_bucket from events where time_of_day_bucket is not null order by 1 asc`),
-    pool.query(`select distinct subject_category from events where subject_category is not null order by 1 asc`),
-    pool.query(`select distinct subject_class from events where subject_class is not null order by 1 asc`),
+    pool.query(`select distinct ${normalizedTimeOfDayBucketSql("e")} as time_of_day_bucket from events e where ${normalizedTimeOfDayBucketSql("e")} is not null order by 1 asc`),
+    pool.query(`select distinct ${normalizedSubjectCategorySql("e")} as subject_category from events e where ${normalizedSubjectCategorySql("e")} is not null order by 1 asc`),
+    pool.query(`select distinct ${normalizedSubjectClassSql("e")} as subject_class from events e where ${normalizedSubjectClassSql("e")} is not null order by 1 asc`),
     pool.query(
       `select
          min(lux)::int as min_lux,
          max(lux)::int as max_lux,
          floor(min(temperature))::int as min_temperature,
          ceil(max(temperature))::int as max_temperature,
-         min(heat_level)::int as min_heat_level,
-         max(heat_level)::int as max_heat_level
-       from events`
+         min(${normalizedHeatLevelSql("e")})::int as min_heat_level,
+         max(${normalizedHeatLevelSql("e")})::int as max_heat_level
+       from events e`
     )
   ]);
 
@@ -69,14 +83,14 @@ export const getKpis = async (filters: DashboardFilters): Promise<KpiResponse> =
     ),
     event_groups as (
       select
-        event,
-        min(camera_name) as camera_name,
-        min(subject_category) as subject_category,
-        min(subject_class) as subject_class,
-        min(timestamp) as first_seen,
+        ${normalizedEventSql("filtered")} as event,
+        min(${normalizedCameraNameSql("filtered")}) as camera_name,
+        min(${normalizedSubjectCategorySql("filtered")}) as subject_category,
+        min(${normalizedSubjectClassSql("filtered")}) as subject_class,
+        min(${normalizedTimestampSql("filtered")}) as first_seen,
         count(*) as row_count
       from filtered
-      group by event
+      group by 1
     ),
     daily_groups as (
       select first_seen::date as day, count(*) as groups
@@ -155,9 +169,9 @@ export const getDailyActivity = async (filters: DashboardFilters): Promise<Daily
       ${filter.text}
     )
     select
-      timestamp::date::text as date,
-      camera_name as "cameraName",
-      count(distinct event)::int as "uniqueEventGroups",
+      ${normalizedTimestampSql("filtered")}::date::text as date,
+      ${normalizedCameraNameSql("filtered")} as "cameraName",
+      count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups",
       count(*)::int as "rawRows"
     from filtered
     group by 1, 2
@@ -177,9 +191,9 @@ export const getHourlyHeatmap = async (filters: DashboardFilters): Promise<Hourl
       ${filter.text}
     )
     select
-      camera_name as "cameraName",
-      extract(hour from timestamp)::int as hour,
-      count(distinct event)::int as "uniqueEventGroups",
+      ${normalizedCameraNameSql("filtered")} as "cameraName",
+      extract(hour from ${normalizedTimestampSql("filtered")})::int as hour,
+      count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups",
       count(*)::int as "rawRows"
     from filtered
     group by 1, 2
@@ -199,14 +213,14 @@ export const getTimeOfDayComposition = async (filters: DashboardFilters): Promis
       ${filter.text}
     )
     select
-      time_of_day_bucket as bucket,
-      count(distinct event) filter (where subject_category = 'wildlife')::int as wildlife,
-      count(distinct event) filter (where subject_category = 'human')::int as human,
-      count(distinct event) filter (where subject_category = 'vehicle')::int as vehicle,
-      count(distinct event) filter (where subject_category = 'empty_scene')::int as "emptyScene"
+      ${normalizedTimeOfDayBucketSql("filtered")} as bucket,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'wildlife')::int as wildlife,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'human')::int as human,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'vehicle')::int as vehicle,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'empty_scene')::int as "emptyScene"
     from filtered
     group by 1
-    order by case time_of_day_bucket when 'morning' then 1 when 'afternoon' then 2 when 'evening' then 3 else 4 end
+    order by case ${normalizedTimeOfDayBucketSql("filtered")} when 'morning' then 1 when 'afternoon' then 2 when 'evening' then 3 else 4 end
     `,
     filter.values
   );
@@ -222,11 +236,11 @@ export const getSubjectByCamera = async (filters: DashboardFilters): Promise<Sub
       ${filter.text}
     )
     select
-      camera_name as "cameraName",
-      subject_class as "subjectClass",
-      count(distinct event)::int as "uniqueEventGroups"
+      ${normalizedCameraNameSql("filtered")} as "cameraName",
+      ${normalizedSubjectClassSql("filtered")} as "subjectClass",
+      count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups"
     from filtered
-    where subject_class is not null
+    where ${normalizedSubjectClassSql("filtered")} is not null
     group by 1, 2
     order by 1 asc, 2 asc
     `,
@@ -244,11 +258,11 @@ export const getMonthlyActivityByCategory = async (filters: DashboardFilters): P
       ${filter.text}
     )
     select
-      to_char(date_trunc('month', timestamp), 'YYYY-MM') as month,
-      count(distinct event) filter (where subject_category = 'wildlife')::int as wildlife,
-      count(distinct event) filter (where subject_category = 'human')::int as human,
-      count(distinct event) filter (where subject_category = 'vehicle')::int as vehicle,
-      count(distinct event) filter (where subject_category = 'empty_scene')::int as "emptyScene"
+      to_char(date_trunc('month', ${normalizedTimestampSql("filtered")}), 'YYYY-MM') as month,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'wildlife')::int as wildlife,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'human')::int as human,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'vehicle')::int as vehicle,
+      count(distinct ${normalizedEventSql("filtered")}) filter (where ${normalizedSubjectCategorySql("filtered")} = 'empty_scene')::int as "emptyScene"
     from filtered
     group by 1
     order by 1 asc
@@ -267,8 +281,8 @@ export const getComposition = async (filters: DashboardFilters): Promise<Composi
       ${filter.text}
     )
     select
-      coalesce(subject_category, 'unknown') as category,
-      count(distinct event)::int as "uniqueEventGroups"
+      coalesce(${normalizedSubjectCategorySql("filtered")}, 'unknown') as category,
+      count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups"
     from filtered
     group by 1
     order by "uniqueEventGroups" desc, category asc
@@ -290,7 +304,7 @@ export const getDaySummary = async (date: string, filters: DashboardFilters): Pr
         ${filter.text}
       )
       select
-        count(distinct event)::int as total_event_groups,
+        count(distinct ${normalizedEventSql("filtered")})::int as total_event_groups,
         count(*)::int as total_raw_rows
       from filtered
       `,
@@ -303,8 +317,8 @@ export const getDaySummary = async (date: string, filters: DashboardFilters): Pr
         ${filter.text}
       )
       select
-        extract(hour from timestamp)::int as hour,
-        count(distinct event)::int as "uniqueEventGroups",
+        extract(hour from ${normalizedTimestampSql("filtered")})::int as hour,
+        count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups",
         count(*)::int as "rawRows"
       from filtered
       group by 1
@@ -319,10 +333,10 @@ export const getDaySummary = async (date: string, filters: DashboardFilters): Pr
         ${filter.text}
       )
       select
-        subject_class as "subjectClass",
-        count(distinct event)::int as "uniqueEventGroups"
+        ${normalizedSubjectClassSql("filtered")} as "subjectClass",
+        count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups"
       from filtered
-      where subject_class is not null
+      where ${normalizedSubjectClassSql("filtered")} is not null
       group by 1
       order by "uniqueEventGroups" desc, "subjectClass" asc
       `,
@@ -335,8 +349,8 @@ export const getDaySummary = async (date: string, filters: DashboardFilters): Pr
         ${filter.text}
       )
       select
-        camera_name as "cameraName",
-        count(distinct event)::int as "uniqueEventGroups"
+        ${normalizedCameraNameSql("filtered")} as "cameraName",
+        count(distinct ${normalizedEventSql("filtered")})::int as "uniqueEventGroups"
       from filtered
       group by 1
       order by "uniqueEventGroups" desc, "cameraName" asc
@@ -351,26 +365,35 @@ export const getDaySummary = async (date: string, filters: DashboardFilters): Pr
       )
       select
         id,
-        to_char("timestamp", 'YYYY-MM-DD"T"HH24:MI:SS') as "timestamp",
-        camera_name,
+        to_char(${normalizedTimestampSql("filtered")}, 'YYYY-MM-DD"T"HH24:MI:SS') as "timestamp",
+        ${normalizedCameraNameSql("filtered")} as camera_name,
+        name,
         mac,
-        event,
+        ${normalizedEventSql("filtered")} as event,
         sequence,
-        subject_class,
-        subject_category,
-        time_of_day_bucket,
-        analysis_title,
-        analysis_summary,
+        ${normalizedSubjectClassSql("filtered")} as subject_class,
+        ${normalizedSubjectCategorySql("filtered")} as subject_category,
+        ${normalizedTimeOfDayBucketSql("filtered")} as time_of_day_bucket,
+        ${normalizedAnalysisTitleSql("filtered")} as analysis_title,
+        ${normalizedAnalysisSummarySql("filtered")} as analysis_summary,
+        analysis,
+        ai_description,
+        ai_processed,
+        json_processed,
+        uploaded,
         lux,
         temperature,
-        heat_level,
+        ${normalizedHeatLevelSql("filtered")} as heat_level,
         sensor,
         location,
-        battery_percentage,
+        ${normalizedBatteryPercentageSql("filtered")} as battery_percentage,
+        voltage,
+        utc_timestamp,
+        utc_timestamp_off,
         filename,
         image_blob_url
       from filtered
-      order by "timestamp" desc, id asc
+      order by ${normalizedTimestampSql("filtered")} desc, id asc
       limit 50
       `,
       filter.values
@@ -408,22 +431,31 @@ export const getEvents = async (query: EventQuery): Promise<EventsResponse> => {
       `
       select
         id,
-        to_char(e."timestamp", 'YYYY-MM-DD"T"HH24:MI:SS') as "timestamp",
-        camera_name,
+        to_char(${normalizedTimestampSql("e")}, 'YYYY-MM-DD"T"HH24:MI:SS') as "timestamp",
+        ${normalizedCameraNameSql("e")} as camera_name,
+        name,
         mac,
-        event,
+        ${normalizedEventSql("e")} as event,
         sequence,
-        subject_class,
-        subject_category,
-        time_of_day_bucket,
-        analysis_title,
-        analysis_summary,
+        ${normalizedSubjectClassSql("e")} as subject_class,
+        ${normalizedSubjectCategorySql("e")} as subject_category,
+        ${normalizedTimeOfDayBucketSql("e")} as time_of_day_bucket,
+        ${normalizedAnalysisTitleSql("e")} as analysis_title,
+        ${normalizedAnalysisSummarySql("e")} as analysis_summary,
+        analysis,
+        ai_description,
+        ai_processed,
+        json_processed,
+        uploaded,
         lux,
         temperature,
-        heat_level,
+        ${normalizedHeatLevelSql("e")} as heat_level,
         sensor,
         location,
-        battery_percentage,
+        ${normalizedBatteryPercentageSql("e")} as battery_percentage,
+        voltage,
+        utc_timestamp,
+        utc_timestamp_off,
         filename,
         image_blob_url
       from events e
@@ -450,19 +482,19 @@ export const getEventsCsv = async (query: EventQuery): Promise<string> => {
   const result = await pool.query(
     `
     select
-      to_char(e."timestamp", 'YYYY-MM-DD HH24:MI:SS') as timestamp,
-      e.camera_name,
+      to_char(${normalizedTimestampSql("e")}, 'YYYY-MM-DD HH24:MI:SS') as timestamp,
+      ${normalizedCameraNameSql("e")} as camera_name,
       e.mac,
-      e.event,
+      ${normalizedEventSql("e")} as event,
       e.sequence,
-      e.subject_class,
-      e.subject_category,
-      e.time_of_day_bucket,
-      replace(coalesce(e.analysis_title, ''), ',', ' ') as analysis_title,
-      replace(coalesce(e.analysis_summary, ''), ',', ' ') as analysis_summary,
+      ${normalizedSubjectClassSql("e")} as subject_class,
+      ${normalizedSubjectCategorySql("e")} as subject_category,
+      ${normalizedTimeOfDayBucketSql("e")} as time_of_day_bucket,
+      replace(coalesce(${normalizedAnalysisTitleSql("e")}, ''), ',', ' ') as analysis_title,
+      replace(coalesce(${normalizedAnalysisSummarySql("e")}, ''), ',', ' ') as analysis_summary,
       e.lux,
       e.temperature,
-      e.heat_level,
+      ${normalizedHeatLevelSql("e")} as heat_level,
       e.sensor
     from events e
     ${filter.text}
