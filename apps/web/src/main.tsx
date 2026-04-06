@@ -7,7 +7,7 @@ import "./styles.css";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const OpsPage = lazy(() => import("./pages/OpsPage").then((module) => ({ default: module.OpsPage })));
-const AnalyticsLabPage = lazy(() => import("./pages/AnalyticsLabPage").then((module) => ({ default: module.AnalyticsLabPage })));
+const AdvancedPage = lazy(() => import("./pages/AdvancedPage").then((module) => ({ default: module.AdvancedPage })));
 const QueryPage = lazy(() => import("./pages/QueryPage").then((module) => ({ default: module.QueryPage })));
 const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 
@@ -34,7 +34,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/ops" element={<OpsPage />} />
-            <Route path="/analytics-lab" element={<AnalyticsLabPage />} />
+            <Route path="/advanced" element={<AdvancedPage />} />
+            <Route path="/analytics-lab" element={<Navigate to="/advanced" replace />} />
             <Route path="/query" element={<QueryPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

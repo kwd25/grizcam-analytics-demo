@@ -412,6 +412,8 @@ export type AnomalyTimelinePoint = {
   date: string;
   anomalyCount: number;
   avgAnomalyScore: number;
+  topDriver: string | null;
+  novelEventCount: number;
 };
 
 export type ForecastPoint = {
@@ -419,6 +421,48 @@ export type ForecastPoint = {
   actual: number;
   expected: number;
   delta: number;
+};
+
+export type CameraForecastPoint = {
+  date: string;
+  cameraName: string;
+  actual: number;
+  expected: number;
+  delta: number;
+  residualPct: number;
+};
+
+export type CameraForecastLeader = {
+  cameraName: string;
+  date: string;
+  actual: number;
+  expected: number;
+  delta: number;
+  residualPct: number;
+};
+
+export type NovelEventPoint = {
+  cameraName: string;
+  category: string;
+  hour: number;
+  currentCount: number;
+  baselineDailyAvg: number;
+  comboCount: number;
+  categoryHourCount: number;
+  shiftPct: number;
+  noveltyScore: number;
+  narrative: string;
+};
+
+export type CategoryShiftPoint = {
+  cameraName: string;
+  category: string;
+  recentSharePct: number;
+  baselineSharePct: number;
+  shiftPct: number;
+  lift: number;
+  recentCount: number;
+  baselineCount: number;
 };
 
 export type CameraClusterPoint = {
@@ -460,6 +504,11 @@ export type AnalyticsLabResponse = {
   cameraAnomalies: CameraAnomalyPoint[];
   anomalyTimeline: AnomalyTimelinePoint[];
   forecast: ForecastPoint[];
+  cameraForecast: CameraForecastPoint[];
+  cameraForecastLeaders: CameraForecastLeader[];
+  novelEvents: NovelEventPoint[];
+  categoryShiftMatrix: CategoryShiftPoint[];
+  advancedInsights: InsightItem[];
   cameraClusters: CameraClusterPoint[];
   dataQuality: DataQualityResponse;
 };

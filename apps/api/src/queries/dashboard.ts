@@ -2,9 +2,12 @@ import type {
   AnalyticsLabResponse,
   BurstDistributionPoint,
   CameraAnomalyPoint,
+  CameraForecastLeader,
+  CameraForecastPoint,
   CameraClusterPoint,
   CameraHealthRow,
   CategoryDistributionPoint,
+  CategoryShiftPoint,
   CategoryTrendPoint,
   CompositionPoint,
   CountLabelPoint,
@@ -26,6 +29,7 @@ import type {
   LagTrendPoint,
   LightSplitPoint,
   MonthlyActivityCategoryPoint,
+  NovelEventPoint,
   OverviewResponse,
   ProcessingFunnelPoint,
   StaleCameraPoint,
@@ -953,6 +957,266 @@ const buildCameraClusters = (
   });
 };
 
+type CameraDailyAggregate = {
+  date: string;
+  cameraName: string;
+  count: number;
+};
+
+type ComboDailyAggregate = {
+  date: string;
+  cameraName: string;
+  category: string;
+  hour: number;
+  count: number;
+};
+
+const buildAnalysisWindows = (dates: string[]) => {
+  const sortedDates = Array.from(new Set(dates)).sort();
+  const recentCount = Math.min(14, Math.max(5, Math.ceil(sortedDates.length / 3)));
+  const recentDates = sortedDates.slice(-recentCount);
+  const baselineDates = sortedDates.slice(Math.max(0, sortedDates.length - recentCount - 28), -recentCount);
+  const fallbackBaselineDates = baselineDates.length > 0 ? baselineDates : sortedDates.slice(0, -1);
+
+  return {
+    sortedDates,
+    recentDates,
+    recentDateSet: new Set(recentDates),
+    baselineDates: fallbackBaselineDates,
+    baselineDateSet: new Set(fallbackBaselineDates),
+    latestDate: recentDates[recentDates.length - 1] ?? sortedDates[sortedDates.length - 1] ?? null
+  };
+};
+
+const buildCameraForecast = (rows: CameraDailyAggregate[]) => {
+  const dates = rows.map((row) => row.date);
+  const { sortedDates, recentDateSet, latestDate } = buildAnalysisWindows(dates);
+  const cameraNames = Array.from(new Set(rows.map((row) => row.cameraName))).sort();
+  const countsByCamera = new Map<string, Map<string, number>>();
+
+  rows.forEach((row) => {
+    if (!countsByCamera.has(row.cameraName)) {
+      countsByCamera.set(row.cameraName, new Map());
+    }
+    countsByCamera.get(row.cameraName)!.set(row.date, row.count);
+  });
+
+  const cameraForecast: CameraForecastPoint[] = [];
+
+  cameraNames.forEach((cameraName) => {
+    const counts = countsByCamera.get(cameraName) ?? new Map<string, number>();
+    sortedDates.forEach((date, index) => {
+      const actual = counts.get(date) ?? 0;
+      const trailing = sortedDates
+        .slice(Math.max(0, index - 7), index)
+        .map((priorDate) => counts.get(priorDate) ?? 0);
+      const expectedRaw = trailing.length > 0 ? trailing.reduce((sum, value) => sum + value, 0) / trailing.length : actual;
+      const expected = roundNumber(expectedRaw, 2);
+      const delta = roundNumber(actual - expected, 2);
+      const residualPct = expected > 0 ? roundNumber((delta / expected) * 100, 1) : actual > 0 ? 100 : 0;
+
+      if (!recentDateSet.has(date) || (actual === 0 && expected === 0)) {
+        return;
+      }
+
+      cameraForecast.push({
+        date,
+        cameraName,
+        actual,
+        expected,
+        delta,
+        residualPct
+      });
+    });
+  });
+
+  const cameraForecastLeaders: CameraForecastLeader[] = cameraForecast
+    .filter((item) => item.date === latestDate)
+    .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || right.actual - left.actual || left.cameraName.localeCompare(right.cameraName))
+    .slice(0, 10)
+    .map((item) => ({ ...item }));
+
+  return { cameraForecast, cameraForecastLeaders };
+};
+
+const buildCategoryShiftMatrix = (rows: ComboDailyAggregate[]) => {
+  const { recentDateSet, baselineDateSet } = buildAnalysisWindows(rows.map((row) => row.date));
+  const recentCounts = new Map<string, number>();
+  const baselineCounts = new Map<string, number>();
+  const recentTotalsByCamera = new Map<string, number>();
+  const baselineTotalsByCamera = new Map<string, number>();
+
+  rows.forEach((row) => {
+    const pairKey = `${row.cameraName}|||${row.category}`;
+    if (recentDateSet.has(row.date)) {
+      recentCounts.set(pairKey, (recentCounts.get(pairKey) ?? 0) + row.count);
+      recentTotalsByCamera.set(row.cameraName, (recentTotalsByCamera.get(row.cameraName) ?? 0) + row.count);
+    }
+    if (baselineDateSet.has(row.date)) {
+      baselineCounts.set(pairKey, (baselineCounts.get(pairKey) ?? 0) + row.count);
+      baselineTotalsByCamera.set(row.cameraName, (baselineTotalsByCamera.get(row.cameraName) ?? 0) + row.count);
+    }
+  });
+
+  const keys = Array.from(new Set([...recentCounts.keys(), ...baselineCounts.keys()]));
+
+  return keys
+    .map((key) => {
+      const [cameraName, category] = key.split("|||");
+      const recentCount = recentCounts.get(key) ?? 0;
+      const baselineCount = baselineCounts.get(key) ?? 0;
+      const recentTotal = recentTotalsByCamera.get(cameraName) ?? 0;
+      const baselineTotal = baselineTotalsByCamera.get(cameraName) ?? 0;
+      const recentSharePct = recentTotal > 0 ? roundNumber((recentCount / recentTotal) * 100, 1) : 0;
+      const baselineSharePct = baselineTotal > 0 ? roundNumber((baselineCount / baselineTotal) * 100, 1) : 0;
+      const shiftPct = roundNumber(recentSharePct - baselineSharePct, 1);
+      const lift = baselineSharePct > 0 ? roundNumber(recentSharePct / baselineSharePct, 2) : recentSharePct > 0 ? 4 : 1;
+
+      return {
+        cameraName,
+        category,
+        recentSharePct,
+        baselineSharePct,
+        shiftPct,
+        lift,
+        recentCount,
+        baselineCount
+      } satisfies CategoryShiftPoint;
+    })
+    .filter((item) => item.recentCount > 0 || item.baselineCount > 0)
+    .sort((left, right) => Math.abs(right.shiftPct) - Math.abs(left.shiftPct) || right.recentCount - left.recentCount || left.cameraName.localeCompare(right.cameraName))
+    .slice(0, 36);
+};
+
+const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: CategoryShiftPoint[]) => {
+  const { recentDateSet, baselineDateSet } = buildAnalysisWindows(rows.map((row) => row.date));
+  const recentDayCount = Math.max(recentDateSet.size, 1);
+  const baselineDayCount = Math.max(baselineDateSet.size, 1);
+  const comboTotals = new Map<string, number>();
+  const categoryHourTotals = new Map<string, number>();
+  const recentComboCounts = new Map<string, number>();
+  const baselineComboCounts = new Map<string, number>();
+  const recentRowsByDate = new Map<string, ComboDailyAggregate[]>();
+  const shiftByPair = new Map(categoryShiftMatrix.map((item) => [`${item.cameraName}|||${item.category}`, item]));
+
+  rows.forEach((row) => {
+    const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
+    const categoryHourKey = `${row.category}|||${row.hour}`;
+    comboTotals.set(comboKey, (comboTotals.get(comboKey) ?? 0) + row.count);
+    categoryHourTotals.set(categoryHourKey, (categoryHourTotals.get(categoryHourKey) ?? 0) + row.count);
+
+    if (recentDateSet.has(row.date)) {
+      recentComboCounts.set(comboKey, (recentComboCounts.get(comboKey) ?? 0) + row.count);
+      recentRowsByDate.set(row.date, [...(recentRowsByDate.get(row.date) ?? []), row]);
+    }
+
+    if (baselineDateSet.has(row.date)) {
+      baselineComboCounts.set(comboKey, (baselineComboCounts.get(comboKey) ?? 0) + row.count);
+    }
+  });
+
+  const maxComboCount = Math.max(...comboTotals.values(), 1);
+  const maxCategoryHourCount = Math.max(...categoryHourTotals.values(), 1);
+
+  const novelEvents: NovelEventPoint[] = Array.from(recentComboCounts.entries())
+    .map(([comboKey, currentCount]) => {
+      const [cameraName, category, hourValue] = comboKey.split("|||");
+      const hour = Number(hourValue);
+      const comboCount = comboTotals.get(comboKey) ?? currentCount;
+      const categoryHourCount = categoryHourTotals.get(`${category}|||${hour}`) ?? currentCount;
+      const baselineDailyAvg = roundNumber((baselineComboCounts.get(comboKey) ?? 0) / baselineDayCount, 2);
+      const currentDailyRate = currentCount / recentDayCount;
+      const pairShift = shiftByPair.get(`${cameraName}|||${category}`)?.shiftPct ?? 0;
+      const comboRarity = 1 - comboCount / maxComboCount;
+      const categoryHourRarity = 1 - categoryHourCount / maxCategoryHourCount;
+      const deviation = Math.max(0, currentDailyRate - baselineDailyAvg);
+      const deviationScore = Math.min(1, deviation / Math.max(baselineDailyAvg, 1));
+      const shiftScore = Math.min(1, Math.max(0, pairShift) / 25);
+      const noveltyScore = roundNumber(100 * (0.45 * comboRarity + 0.25 * categoryHourRarity + 0.2 * deviationScore + 0.1 * shiftScore), 1);
+      const narrative = `${cameraName} is showing an unusual ${category} pattern near ${hour.toString().padStart(2, "0")}:00. Recent count ${currentCount}, baseline ${baselineDailyAvg.toFixed(1)} per day.`;
+
+      return {
+        cameraName,
+        category,
+        hour,
+        currentCount,
+        baselineDailyAvg,
+        comboCount,
+        categoryHourCount,
+        shiftPct: roundNumber(pairShift, 1),
+        noveltyScore,
+        narrative
+      } satisfies NovelEventPoint;
+    })
+    .filter((item) => item.currentCount > 0)
+    .sort((left, right) => right.noveltyScore - left.noveltyScore || right.currentCount - left.currentCount || left.cameraName.localeCompare(right.cameraName))
+    .slice(0, 12);
+
+  const noveltyByCombo = new Map(novelEvents.map((item) => [`${item.cameraName}|||${item.category}|||${item.hour}`, item]));
+  const noveltyByDate = new Map<string, { novelEventCount: number; topDriver: string | null; topScore: number }>();
+
+  recentRowsByDate.forEach((dateRows, date) => {
+    dateRows.forEach((row) => {
+      const novel = noveltyByCombo.get(`${row.cameraName}|||${row.category}|||${row.hour}`);
+      if (!novel || novel.noveltyScore < 55) {
+        return;
+      }
+
+      const current = noveltyByDate.get(date) ?? { novelEventCount: 0, topDriver: null, topScore: -1 };
+      current.novelEventCount += row.count;
+      if (novel.noveltyScore > current.topScore) {
+        current.topScore = novel.noveltyScore;
+        current.topDriver = `${novel.cameraName} ${novel.category} @ ${novel.hour.toString().padStart(2, "0")}:00`;
+      }
+      noveltyByDate.set(date, current);
+    });
+  });
+
+  return { novelEvents, noveltyByDate };
+};
+
+const buildAdvancedInsights = (leaders: CameraForecastLeader[], novelEvents: NovelEventPoint[], shifts: CategoryShiftPoint[]) => {
+  const insights: InsightItem[] = [];
+  const positiveLeader = leaders.filter((item) => item.delta > 0).sort((left, right) => right.delta - left.delta)[0];
+  const negativeLeader = leaders.filter((item) => item.delta < 0).sort((left, right) => left.delta - right.delta)[0];
+  const topNovel = novelEvents[0];
+  const topShift = shifts.filter((item) => item.shiftPct > 0).sort((left, right) => right.shiftPct - left.shiftPct)[0];
+
+  if (positiveLeader) {
+    insights.push({
+      title: `${positiveLeader.cameraName} is running hot`,
+      detail: `Actual activity is ${roundNumber(positiveLeader.residualPct)}% above expected on ${positiveLeader.date}.`,
+      tone: "warning"
+    });
+  }
+
+  if (negativeLeader) {
+    insights.push({
+      title: `${negativeLeader.cameraName} is quieter than expected`,
+      detail: `Actual activity is ${roundNumber(Math.abs(negativeLeader.residualPct))}% below expected on ${negativeLeader.date}.`,
+      tone: "info"
+    });
+  }
+
+  if (topNovel) {
+    insights.push({
+      title: `Novel ${topNovel.category} activity is emerging`,
+      detail: `${topNovel.cameraName} at ${topNovel.hour.toString().padStart(2, "0")}:00 carries the highest novelty score in the current slice.`,
+      tone: "alert"
+    });
+  }
+
+  if (topShift) {
+    insights.push({
+      title: `${topShift.cameraName} has a category shift`,
+      detail: `${topShift.category} share moved by ${roundNumber(topShift.shiftPct)} points against baseline.`,
+      tone: "positive"
+    });
+  }
+
+  return insights.slice(0, 4);
+};
+
 export const getAnalyticsLab = async (filters: DashboardFilters): Promise<AnalyticsLabResponse> => {
   const cte = filteredEventsCte(filters);
 
@@ -961,6 +1225,8 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
     cameraCategoryResult,
     dailySeasonalityResult,
     burstBehaviorResult,
+    cameraDailyResult,
+    comboDailyResult,
     diversityResult,
     ratioResult,
     environmentalResult,
@@ -1021,6 +1287,34 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
       from event_groups
       group by 1
       order by "eventCount" desc, "cameraName" asc
+      `,
+      cte.values
+    ),
+    pool.query(
+      `
+      ${cte.text}
+      select
+        first_seen::date::text as date,
+        camera_name as "cameraName",
+        count(*)::int as count
+      from event_groups
+      group by 1, 2
+      order by 1 asc, 2 asc
+      `,
+      cte.values
+    ),
+    pool.query(
+      `
+      ${cte.text}
+      select
+        first_seen::date::text as date,
+        camera_name as "cameraName",
+        subject_category as category,
+        extract(hour from first_seen)::int as hour,
+        count(*)::int as count
+      from event_groups
+      group by 1, 2, 3, 4
+      order by 1 asc, 2 asc, 3 asc, 4 asc
       `,
       cte.values
     ),
@@ -1153,6 +1447,9 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
       delta: roundNumber(actual - expected, 2)
     };
   });
+  const { cameraForecast, cameraForecastLeaders } = buildCameraForecast(cameraDailyResult.rows as CameraDailyAggregate[]);
+  const categoryShiftMatrix = buildCategoryShiftMatrix(comboDailyResult.rows as ComboDailyAggregate[]);
+  const { novelEvents, noveltyByDate } = buildNovelEvents(comboDailyResult.rows as ComboDailyAggregate[], categoryShiftMatrix);
 
   const cameraAnomalies: CameraAnomalyPoint[] = cameraAnomaliesRaw.rows.map((row) => {
     const health = computeCameraHealth({
@@ -1203,6 +1500,17 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
       { label: "JSON pending after AI", count: Number(dataQualityRow.json_pending_after_ai ?? 0) }
     ]
   };
+  const advancedInsights = buildAdvancedInsights(cameraForecastLeaders, novelEvents, categoryShiftMatrix);
+  const anomalyTimeline = anomalyTimelineResult.rows.map((row) => {
+    const novelty = noveltyByDate.get(String(row.date));
+    return {
+      date: String(row.date),
+      anomalyCount: Number(row.anomalyCount ?? 0),
+      avgAnomalyScore: roundNumber(row.avgAnomalyScore ?? 0, 1),
+      topDriver: novelty?.topDriver ?? null,
+      novelEventCount: novelty?.novelEventCount ?? 0
+    };
+  }) as AnalyticsLabResponse["anomalyTimeline"];
 
   return {
     hourCategoryHeatmap: hourCategoryResult.rows as HeatmapCountPoint[],
@@ -1223,8 +1531,13 @@ export const getAnalyticsLab = async (filters: DashboardFilters): Promise<Analyt
     })),
     environmentalContext: environmentalResult.rows as EnvironmentalContextPoint[],
     cameraAnomalies,
-    anomalyTimeline: anomalyTimelineResult.rows as AnalyticsLabResponse["anomalyTimeline"],
+    anomalyTimeline,
     forecast,
+    cameraForecast,
+    cameraForecastLeaders,
+    novelEvents,
+    categoryShiftMatrix,
+    advancedInsights,
     cameraClusters: buildCameraClusters(diversityByCamera, cameraAnomalies),
     dataQuality
   };
