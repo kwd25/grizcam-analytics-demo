@@ -3,8 +3,18 @@ import { formatDurationShort, formatEventTimestamp, titleCase } from "../lib/uti
 import { SectionCard } from "./SectionCard";
 import { StatusBadge } from "./StatusBadge";
 
-export const NotableEventsList = ({ rows }: { rows: EventRecord[] }) => (
-  <SectionCard title="Notable Events" subtitle="High-signal detections and operational outliers, ordered by urgency and recency.">
+type NotableEventsListProps = {
+  rows: EventRecord[];
+  title?: string;
+  subtitle?: string;
+};
+
+export const NotableEventsList = ({
+  rows,
+  title = "Notable Events",
+  subtitle = "High-signal detections and operational outliers, ordered by urgency and recency."
+}: NotableEventsListProps) => (
+  <SectionCard title={title} subtitle={subtitle}>
     <div className="space-y-3">
       {rows.map((row) => (
         <div key={row.id} className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 md:grid-cols-[120px_minmax(0,1fr)]">
