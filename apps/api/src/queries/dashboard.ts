@@ -1090,6 +1090,7 @@ const buildCategoryShiftMatrix = (rows: ComboDailyAggregate[]) => {
 };
 
 const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: CategoryShiftPoint[]) => {
+  const noveltyEligibleRows = rows.filter((row) => row.category !== "empty_scene");
   const { recentDateSet, baselineDateSet } = buildAnalysisWindows(rows.map((row) => row.date));
   const recentDayCount = Math.max(recentDateSet.size, 1);
   const baselineDayCount = Math.max(baselineDateSet.size, 1);
@@ -1100,7 +1101,7 @@ const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: Cate
   const recentRowsByDate = new Map<string, ComboDailyAggregate[]>();
   const shiftByPair = new Map(categoryShiftMatrix.map((item) => [`${item.cameraName}|||${item.category}`, item]));
 
-  rows.forEach((row) => {
+  noveltyEligibleRows.forEach((row) => {
     const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
     const categoryHourKey = `${row.category}|||${row.hour}`;
     comboTotals.set(comboKey, (comboTotals.get(comboKey) ?? 0) + row.count);
@@ -1177,6 +1178,7 @@ const buildNovelEvents = (rows: ComboDailyAggregate[], categoryShiftMatrix: Cate
 };
 
 const buildNoveltyTimelineDaily = (rows: ComboDailyAggregate[], categoryShiftMatrix: CategoryShiftPoint[]): NoveltyTimelinePoint[] => {
+  const noveltyEligibleRows = rows.filter((row) => row.category !== "empty_scene");
   const { sortedDates, baselineDateSet } = buildAnalysisWindows(rows.map((row) => row.date));
   const baselineDayCount = Math.max(baselineDateSet.size, 1);
   const comboTotals = new Map<string, number>();
@@ -1185,7 +1187,7 @@ const buildNoveltyTimelineDaily = (rows: ComboDailyAggregate[], categoryShiftMat
   const shiftByPair = new Map(categoryShiftMatrix.map((item) => [`${item.cameraName}|||${item.category}`, item]));
   const rowsByDate = new Map<string, ComboDailyAggregate[]>();
 
-  rows.forEach((row) => {
+  noveltyEligibleRows.forEach((row) => {
     const comboKey = `${row.cameraName}|||${row.category}|||${row.hour}`;
     const categoryHourKey = `${row.category}|||${row.hour}`;
     comboTotals.set(comboKey, (comboTotals.get(comboKey) ?? 0) + row.count);
