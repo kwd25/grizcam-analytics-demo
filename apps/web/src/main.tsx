@@ -8,6 +8,8 @@ import "./styles.css";
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const OpsPage = lazy(() => import("./pages/OpsPage").then((module) => ({ default: module.OpsPage })));
 const AnalyticsLabPage = lazy(() => import("./pages/AnalyticsLabPage").then((module) => ({ default: module.AnalyticsLabPage })));
+const QueryPage = lazy(() => import("./pages/QueryPage").then((module) => ({ default: module.QueryPage })));
+const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 
 const queryClient = new QueryClient();
 
@@ -33,6 +35,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/" element={<DashboardPage />} />
             <Route path="/ops" element={<OpsPage />} />
             <Route path="/analytics-lab" element={<AnalyticsLabPage />} />
+            <Route path="/query" element={<QueryPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
