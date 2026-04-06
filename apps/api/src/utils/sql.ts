@@ -39,9 +39,60 @@ export const normalizedAnalysisSummarySql = (alias = "e") =>
   `coalesce(${blankToNullSql(`${alias}.analysis_summary`)}, ${blankToNullSql(`${normalizedAnalysisSql(alias)}->>'summary'`)})`;
 
 export const normalizedBatteryPercentageSql = (alias = "e") =>
-  `coalesce(${alias}.battery_percentage, ${alias}."batteryPercentage")`;
+  `case
+    when coalesce(${alias}.battery_percentage, ${alias}."batteryPercentage") between 0 and 100
+      then coalesce(${alias}.battery_percentage, ${alias}."batteryPercentage")
+    else null
+  end`;
 
-export const normalizedHeatLevelSql = (alias = "e") => `coalesce(${alias}.heat_level, ${alias}."heatLevel")`;
+export const rawBatteryPercentageSql = (alias = "e") => `coalesce(${alias}.battery_percentage, ${alias}."batteryPercentage")`;
+
+export const normalizedHeatLevelSql = (alias = "e") =>
+  `case
+    when coalesce(${alias}.heat_level, ${alias}."heatLevel") between 0 and 100
+      then coalesce(${alias}.heat_level, ${alias}."heatLevel")
+    else null
+  end`;
+
+export const normalizedVoltageSql = (alias = "e") =>
+  `case when ${alias}.voltage between 0 and 18 then ${alias}.voltage else null end`;
+
+export const normalizedTemperatureSql = (alias = "e") =>
+  `case when ${alias}.temperature between -60 and 160 then ${alias}.temperature else null end`;
+
+export const normalizedHumiditySql = (alias = "e") =>
+  `case when ${alias}.humidity between 0 and 100 then ${alias}.humidity else null end`;
+
+export const normalizedPressureSql = (alias = "e") =>
+  `case when ${alias}.pressure between 800 and 1200 then ${alias}.pressure else null end`;
+
+export const normalizedLuxSql = (alias = "e") =>
+  `case when ${alias}.lux between 0 and 200000 then ${alias}.lux else null end`;
+
+export const normalizedBearingSql = (alias = "e") =>
+  `case when ${alias}.bearing between 0 and 360 then ${alias}.bearing else null end`;
+
+export const normalizedLatitudeSql = (alias = "e") =>
+  `case when ${alias}.latitude between -90 and 90 then ${alias}.latitude else null end`;
+
+export const normalizedLongitudeSql = (alias = "e") =>
+  `case when ${alias}.longitude between -180 and 180 then ${alias}.longitude else null end`;
+
+export const normalizedFileTypeSql = (alias = "e") =>
+  `coalesce(${blankToNullSql(`${alias}.file_type`)}, ${blankToNullSql(`${alias}."fileType"`)})`;
+
+export const normalizedTimezoneSql = (alias = "e") =>
+  `coalesce(${blankToNullSql(`${alias}.timezone`)}, 'America/Denver')`;
+
+export const normalizedUploadTextSql = (alias = "e") =>
+  `coalesce(
+    ${blankToNullSql(`${alias}.upload`)},
+    case
+      when ${alias}.uploaded is true then 'true'
+      when ${alias}.uploaded is false then 'false'
+      else null
+    end
+  )`;
 
 export const normalizedSubjectClassSql = (alias = "e") => {
   const source = subjectSignalSql(alias);
@@ -209,6 +260,14 @@ const asNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const clampNumber = (value: unknown, min: number, max: number): number | null => {
+  const parsed = asNumber(value);
+  if (parsed === null) {
+    return null;
+  }
+  return parsed >= min && parsed <= max ? parsed : null;
+};
+
 const asBoolean = (value: unknown): boolean | null => {
   if (typeof value === "boolean") {
     return value;
@@ -242,34 +301,311 @@ const safeJsonObject = (value: unknown): Record<string, unknown> | null => {
 
 const analysisObjectForRow = (row: Record<string, unknown>) => safeJsonObject(row.analysis) ?? safeJsonObject(row.ai_description);
 
+const parseTimestamp = (value: unknown) => {
+  const text = asString(value);
+  if (!text) {
+    return null;
+  }
+
+  const parsed = new Date(text.includes("T") ? text : text.replace(" ", "T"));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const diffSeconds = (start: unknown, end: unknown) => {
+  const startDate = parseTimestamp(start);
+  const endDate = parseTimestamp(end);
+  if (!startDate || !endDate) {
+    return null;
+  }
+
+  const diff = Math.round((endDate.getTime() - startDate.getTime()) / 1000);
+  return diff >= 0 ? diff : null;
+};
+
+const toIsoLikeString = (value: unknown) => asString(value);
+
+const buildDataQualityFlags = (input: {
+  analysisSummary: string | null;
+  analysisTitle: string | null;
+  aiProcessed: boolean | null;
+  jsonProcessed: boolean | null;
+  uploaded: boolean | null;
+  voltage: number | null;
+  batteryPercentage: number | null;
+  temperature: number | null;
+  humidity: number | null;
+  pressure: number | null;
+  lux: number | null;
+}) => {
+  const flags: string[] = [];
+
+  if (!input.analysisSummary && !input.analysisTitle) {
+    flags.push("missing_analysis");
+  }
+  if (input.aiProcessed === true && !input.analysisSummary && !input.analysisTitle) {
+    flags.push("ai_without_summary");
+  }
+  if (input.jsonProcessed === false && input.aiProcessed === true) {
+    flags.push("json_pending");
+  }
+  if (input.uploaded === false) {
+    flags.push("upload_failed");
+  }
+  if (input.voltage !== null && input.voltage < 11.4) {
+    flags.push("low_voltage");
+  }
+  if (input.batteryPercentage !== null && input.batteryPercentage < 20) {
+    flags.push("low_battery");
+  }
+  if (input.lux !== null && input.lux < 15) {
+    flags.push("low_light");
+  }
+  if (input.temperature === null) {
+    flags.push("missing_temperature");
+  }
+  if (input.humidity === null) {
+    flags.push("missing_humidity");
+  }
+  if (input.pressure === null) {
+    flags.push("missing_pressure");
+  }
+
+  return flags;
+};
+
+const deriveDaypart = (timestamp: string | null) => {
+  if (!timestamp) {
+    return "unknown";
+  }
+
+  const parsed = parseTimestamp(timestamp);
+  if (!parsed) {
+    return "unknown";
+  }
+
+  const hour = parsed.getHours();
+  if (hour >= 5 && hour <= 7) {
+    return "dawn";
+  }
+  if (hour >= 8 && hour <= 16) {
+    return "day";
+  }
+  if (hour >= 17 && hour <= 20) {
+    return "dusk";
+  }
+  return "night";
+};
+
+const computeHealthScore = (input: {
+  uploaded: boolean | null;
+  aiProcessed: boolean | null;
+  jsonProcessed: boolean | null;
+  uploadLagSeconds: number | null;
+  processingLagSeconds: number | null;
+  voltage: number | null;
+  batteryPercentage: number | null;
+}) => {
+  let score = 100;
+
+  if (input.uploaded === false) {
+    score -= 28;
+  }
+  if (input.aiProcessed === false) {
+    score -= 12;
+  }
+  if (input.jsonProcessed === false) {
+    score -= 10;
+  }
+  if (input.uploadLagSeconds !== null && input.uploadLagSeconds > 3600) {
+    score -= 12;
+  }
+  if (input.processingLagSeconds !== null && input.processingLagSeconds > 7200) {
+    score -= 14;
+  }
+  if (input.voltage !== null && input.voltage < 11.5) {
+    score -= 16;
+  }
+  if (input.batteryPercentage !== null && input.batteryPercentage < 20) {
+    score -= 10;
+  }
+
+  return Math.max(0, Math.min(100, score));
+};
+
+const computeAnomalyScore = (input: {
+  uploaded: boolean | null;
+  aiProcessed: boolean | null;
+  jsonProcessed: boolean | null;
+  uploadLagSeconds: number | null;
+  processingLagSeconds: number | null;
+  aiLagSeconds: number | null;
+  voltage: number | null;
+  batteryPercentage: number | null;
+  lowLightFlag: boolean;
+  analysisSummary: string | null;
+}) => {
+  let score = 0;
+
+  if (input.uploaded === false) {
+    score += 32;
+  }
+  if (input.aiProcessed === false) {
+    score += 12;
+  }
+  if (input.jsonProcessed === false) {
+    score += 10;
+  }
+  if (input.uploadLagSeconds !== null) {
+    score += Math.min(18, input.uploadLagSeconds / 900);
+  }
+  if (input.processingLagSeconds !== null) {
+    score += Math.min(16, input.processingLagSeconds / 1200);
+  }
+  if (input.aiLagSeconds !== null) {
+    score += Math.min(12, input.aiLagSeconds / 1200);
+  }
+  if (input.voltage !== null && input.voltage < 11.5) {
+    score += 14;
+  }
+  if (input.batteryPercentage !== null && input.batteryPercentage < 20) {
+    score += 12;
+  }
+  if (!input.analysisSummary && input.aiProcessed === true) {
+    score += 8;
+  }
+  if (input.lowLightFlag) {
+    score += 4;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+};
+
+const deriveOperationalStatus = (healthScore: number, anomalyScore: number, uploaded: boolean | null) => {
+  if (uploaded === false || anomalyScore >= 65 || healthScore < 45) {
+    return "alert";
+  }
+  if (anomalyScore >= 35 || healthScore < 70) {
+    return "warning";
+  }
+  return "healthy";
+};
+
 export const mapEventRow = (row: Record<string, unknown>) => {
   const analysis = analysisObjectForRow(row);
   const analysisTitle = asString(row.analysis_title) ?? asString(analysis?.title);
   const analysisSummary = asString(row.analysis_summary) ?? asString(analysis?.summary);
+  const timestamp = toIsoLikeString(row.local_timestamp) ?? asString(row.timestamp) ?? asString(row.utc_timestamp_off) ?? asString(row.utc_timestamp) ?? "";
+  const utcTimestamp = toIsoLikeString(row.utc_timestamp);
+  const utcTimestampOff = toIsoLikeString(row.utc_timestamp_off);
+  const created = toIsoLikeString(row.created);
+  const aiTimestamp = toIsoLikeString(row.ai_timestamp);
+  const jsonTimestamp = toIsoLikeString(row.json_timestamp);
+  const aiProcessed = asBoolean(row.ai_processed);
+  const jsonProcessed = asBoolean(row.json_processed);
+  const uploaded = asBoolean(row.uploaded);
+  const lux = clampNumber(row.lux, 0, 200000);
+  const temperature = clampNumber(row.temperature, -60, 160);
+  const heatLevel = clampNumber(row.heat_level, 0, 100);
+  const humidity = clampNumber(row.humidity, 0, 100);
+  const pressure = clampNumber(row.pressure, 800, 1200);
+  const voltage = clampNumber(row.voltage, 0, 18);
+  const batteryPercentage = clampNumber(row.battery_percentage, 0, 100);
+  const uploadLagSeconds = asNumber(row.upload_lag_seconds) ?? diffSeconds(timestamp, created);
+  const aiLagSeconds = asNumber(row.ai_lag_seconds) ?? diffSeconds(timestamp, aiTimestamp);
+  const processingLagSeconds = asNumber(row.processing_lag_seconds) ?? aiLagSeconds ?? diffSeconds(timestamp, jsonTimestamp) ?? uploadLagSeconds;
+  const lowLightFlag = typeof row.low_light_flag === "boolean" ? row.low_light_flag : lux !== null && lux < 15;
+  const daypart = asString(row.daypart) ?? deriveDaypart(timestamp);
+  const healthScore = asNumber(row.health_score) ?? computeHealthScore({
+    uploaded,
+    aiProcessed,
+    jsonProcessed,
+    uploadLagSeconds,
+    processingLagSeconds,
+    voltage,
+    batteryPercentage
+  });
+  const anomalyScore = asNumber(row.anomaly_score) ?? computeAnomalyScore({
+    uploaded,
+    aiProcessed,
+    jsonProcessed,
+    uploadLagSeconds,
+    processingLagSeconds,
+    aiLagSeconds,
+    voltage,
+    batteryPercentage,
+    lowLightFlag,
+    analysisSummary
+  });
+  const operationalStatus =
+    asString(row.operational_status) ?? deriveOperationalStatus(healthScore, anomalyScore, uploaded);
+  const dataQualityFlags = buildDataQualityFlags({
+    analysisSummary,
+    analysisTitle,
+    aiProcessed,
+    jsonProcessed,
+    uploaded,
+    voltage,
+    batteryPercentage,
+    temperature,
+    humidity,
+    pressure,
+    lux
+  });
 
   return {
     id: String(row.id),
-    timestamp: asString(row.timestamp) ?? asString(row.utc_timestamp_off) ?? asString(row.utc_timestamp) ?? "",
+    timestamp,
+    localTimestamp: timestamp,
+    utcTimestamp,
+    utcTimestampOff,
+    created,
+    aiTimestamp,
+    jsonTimestamp,
+    timezone: asString(row.timezone) ?? "America/Denver",
     cameraName: asString(row.camera_name) ?? asString(row.name) ?? asString(row.mac) ?? "",
+    camera: asString(row.camera_name) ?? asString(row.name) ?? asString(row.mac) ?? "",
     mac: String(row.mac),
     event: asString(row.event) ?? String(row.id),
+    eventGroup: asString(row.event) ?? String(row.id),
     sequence: Number(row.sequence ?? 0),
     subjectClass: asString(row.subject_class),
     subjectCategory: asString(row.subject_category),
     timeOfDayBucket: asString(row.time_of_day_bucket),
+    daypart,
     analysisTitle,
     analysisSummary,
-    lux: asNumber(row.lux),
-    temperature: asNumber(row.temperature),
-    heatLevel: asNumber(row.heat_level),
+    summary: analysisSummary ?? analysisTitle ?? "Unprocessed",
+    aiDescription: asString(row.ai_description),
+    analysis,
+    lux,
+    temperature,
+    humidity,
+    pressure,
+    heatLevel,
     sensor: asString(row.sensor) ?? "unknown",
     location: asString(row.location),
-    batteryPercentage: asNumber(row.battery_percentage),
+    latitude: clampNumber(row.latitude, -90, 90),
+    longitude: clampNumber(row.longitude, -180, 180),
+    bearing: clampNumber(row.bearing, 0, 360),
+    batteryPercentage,
     filename: asString(row.filename),
+    fileType: asString(row.file_type) ?? asString(row.fileType),
     imageBlobUrl: asString(row.image_blob_url),
-    aiProcessed: asBoolean(row.ai_processed),
-    jsonProcessed: asBoolean(row.json_processed),
-    uploaded: asBoolean(row.uploaded),
-    voltage: asNumber(row.voltage)
+    aiProcessed,
+    jsonProcessed,
+    uploaded,
+    upload: asString(row.upload),
+    voltage,
+    tag: asString(row.tag),
+    eventGroupSize: Number(row.event_group_size ?? 1),
+    uploadLagSeconds,
+    aiLagSeconds,
+    processingLagSeconds,
+    lowLightFlag,
+    operationalStatus,
+    anomalyFlag: anomalyScore >= 45,
+    anomalyScore,
+    healthScore,
+    dataQualityFlags
   };
 };

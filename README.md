@@ -1,6 +1,6 @@
 # GrizCam Analytics Demo
 
-Hosted-demo-ready analytics dashboard for the synthetic Postgres database `grizcam_synthetic_2025`.
+Hosted-demo-ready analytics dashboard for the synthetic Postgres database `grizcam_synthetic_2025`, now split into an operational overview dashboard and a separate Analytics Lab for deeper ML-oriented exploration.
 
 ## Stack
 
@@ -29,8 +29,9 @@ synthetic/
 
 - URL-backed dashboard filters
 - Camera multi-select, date range, time-of-day, subject, and telemetry filters
-- KPI strip with core and derived analytics
-- Daily trend, hourly heatmap, subject heatmap, time-of-day composition, seasonality, burstiness, telemetry, and composition charts
+- Operational overview dashboard with KPI, camera health, pipeline, telemetry, and notable-event sections
+- Analytics Lab page for anomaly analysis, forecasting baselines, clustering-style camera groupings, and data-quality/model-readiness checks
+- Daily trend, day drilldown, event explorer, and reusable chart/card components across both pages
 - Clickable day drilldown panel
 - Server-side event explorer with sorting, pagination, debounced text search, and row expansion
 - Parameterized SQL throughout the API
@@ -197,10 +198,9 @@ Recommended minimum Vercel set:
 - `GET /api/charts/hourly-heatmap`
 - `GET /api/charts/time-of-day-composition`
 - `GET /api/charts/subject-by-camera`
-- `GET /api/charts/monthly-seasonality`
-- `GET /api/charts/burstiness`
-- `GET /api/charts/telemetry`
 - `GET /api/charts/composition`
+- `GET /api/overview`
+- `GET /api/analytics-lab`
 - `GET /api/day/:date/summary`
 - `GET /api/events`
 

@@ -1,8 +1,9 @@
 import type { EventQuery, EventsResponse } from "@grizcam/shared";
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { formatEventTimestamp, formatNumber, titleCase } from "../lib/utils";
+import { formatDurationShort, formatEventTimestamp, formatNumber, titleCase } from "../lib/utils";
 import { SectionCard } from "./SectionCard";
+import { StatusBadge } from "./StatusBadge";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 
 type EventTableProps = {
@@ -87,13 +88,14 @@ export const EventTable = ({ data, isLoading, query, onQueryChange, exportUrl }:
                   </button>
                 </th>
               ))}
+              <th className="px-3 py-3">Status</th>
               <th className="px-3 py-3">Summary</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={columns.length + 2} className="px-4 py-10 text-center text-slate-400">
                   Loading events…
                 </td>
               </tr>
@@ -113,22 +115,36 @@ export const EventTable = ({ data, isLoading, query, onQueryChange, exportUrl }:
                     <td className="px-3 py-3">{row.lux ?? "—"}</td>
                     <td className="px-3 py-3">{row.temperature ?? "—"}</td>
                     <td className="px-3 py-3">{row.heatLevel ?? "—"}</td>
-                    <td className="px-3 py-3 text-slate-400">{row.analysisTitle ?? row.analysisSummary ?? "No narrative"}</td>
+                    <td className="px-3 py-3"><StatusBadge status={row.operationalStatus ?? "healthy"} /></td>
+                    <td className="px-3 py-3 text-slate-400">{row.summary ?? row.analysisTitle ?? row.analysisSummary ?? "No narrative"}</td>
                   </tr>
                   {expandedRowId === row.id ? (
                     <tr className="border-t border-white/5 bg-white/[0.03]">
-                      <td colSpan={columns.length + 1} className="px-4 py-4">
+                      <td colSpan={columns.length + 2} className="px-4 py-4">
                         <div className="grid gap-4 md:grid-cols-2">
                           <div className="space-y-2 text-sm text-slate-300">
                             <div><span className="text-slate-500">MAC:</span> {row.mac}</div>
                             <div><span className="text-slate-500">Sensor:</span> {row.sensor}</div>
-                            <div><span className="text-slate-500">Time bucket:</span> {titleCase(row.timeOfDayBucket ?? "unknown")}</div>
+                            <div><span className="text-slate-500">Time bucket:</span> {titleCase(row.timeOfDayBucket ?? row.daypart ?? "unknown")}</div>
                             <div><span className="text-slate-500">Battery:</span> {row.batteryPercentage ?? "—"}</div>
+                            <div><span className="text-slate-500">Voltage:</span> {row.voltage ?? "—"}</div>
+                            <div><span className="text-slate-500">Upload lag:</span> {formatDurationShort(row.uploadLagSeconds)}</div>
+                            <div><span className="text-slate-500">Processing lag:</span> {formatDurationShort(row.processingLagSeconds)}</div>
+                            <div><span className="text-slate-500">Event group size:</span> {formatNumber(row.eventGroupSize)}</div>
                             <div><span className="text-slate-500">Filename:</span> {row.filename ?? "—"}</div>
                           </div>
                           <div className="space-y-2 text-sm text-slate-300">
                             <div className="text-slate-500">Summary</div>
-                            <div>{row.analysisSummary ?? "No analysis summary available."}</div>
+                            <div>{row.summary ?? row.analysisSummary ?? "No analysis summary available."}</div>
+                            {row.dataQualityFlags?.length ? (
+                              <div className="flex flex-wrap gap-2 pt-2">
+                                {row.dataQualityFlags.map((flag) => (
+                                  <span key={flag} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
+                                    {titleCase(flag)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
                             {row.imageBlobUrl ? (
                               <a href={row.imageBlobUrl} target="_blank" rel="noreferrer" className="inline-block text-emerald-300 hover:text-emerald-200">
                                 Open image blob

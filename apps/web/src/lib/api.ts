@@ -1,4 +1,5 @@
 import type {
+  AnalyticsLabResponse,
   CompositionPoint,
   DailyActivityPoint,
   DashboardFilters,
@@ -9,6 +10,7 @@ import type {
   HourlyHeatmapPoint,
   KpiResponse,
   MonthlyActivityCategoryPoint,
+  OverviewResponse,
   SubjectCameraHeatmapPoint,
   TimeOfDayCompositionPoint
 } from "@grizcam/shared";
@@ -55,6 +57,8 @@ export const api = {
   monthlyActivityByCategory: (filters: DashboardFilters) =>
     fetchJson<MonthlyActivityCategoryPoint[]>("/api/charts/monthly-activity-by-category", filters),
   composition: (filters: DashboardFilters) => fetchJson<CompositionPoint[]>("/api/charts/composition", filters),
+  overview: (filters: DashboardFilters) => fetchJson<OverviewResponse>("/api/overview", filters),
+  analyticsLab: (filters: DashboardFilters) => fetchJson<AnalyticsLabResponse>("/api/analytics-lab", filters),
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),
   exportUrl: (filters: EventQuery) => `${appEnv.apiBaseUrl}/api/events/export?${buildParams(filters)}`,

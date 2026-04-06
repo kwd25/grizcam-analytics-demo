@@ -81,7 +81,7 @@ export const DayDetailPanel = ({ selectedDate, data }: { selectedDate?: string; 
                     <td className="px-2 py-2">{formatEventTimestamp(event.timestamp)}</td>
                     <td className="px-2 py-2">{event.cameraName}</td>
                     <td className="px-2 py-2">{titleCase(event.subjectClass ?? "unknown")}</td>
-                    <td className="px-2 py-2 text-slate-400">{event.analysisSummary ?? event.analysisTitle ?? "No summary"}</td>
+                    <td className="px-2 py-2 text-slate-400">{event.summary ?? event.analysisSummary ?? event.analysisTitle ?? "No summary"}</td>
                   </tr>
                 ))}
               </tbody>

@@ -120,6 +120,22 @@ export type KpiResponse = {
   topSpecies: string | null;
 };
 
+export type InsightTone = "info" | "positive" | "warning" | "alert";
+
+export type InsightItem = {
+  title: string;
+  detail: string;
+  tone: InsightTone;
+};
+
+export type EventAnalysisRecord = {
+  title?: string | null;
+  summary?: string | null;
+  details?: Record<string, unknown> | null;
+  keywords?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
 export type DailyActivityPoint = {
   date: string;
   cameraName: string;
@@ -174,27 +190,58 @@ export type DaySummaryResponse = {
 export type EventRecord = {
   id: string;
   timestamp: string;
+  localTimestamp: string;
+  utcTimestamp?: string | null;
+  utcTimestampOff?: string | null;
+  created?: string | null;
+  aiTimestamp?: string | null;
+  jsonTimestamp?: string | null;
+  timezone?: string | null;
   cameraName: string;
+  camera: string;
   mac: string;
   event: string;
+  eventGroup: string;
+  eventGroupSize: number;
   sequence: number;
   subjectClass: string | null;
   subjectCategory: string | null;
   timeOfDayBucket: string | null;
+  daypart?: string | null;
   analysisTitle: string | null;
   analysisSummary: string | null;
+  summary?: string | null;
+  aiDescription?: string | null;
+  analysis?: EventAnalysisRecord | null;
   lux: number | null;
   temperature: number | null;
+  humidity?: number | null;
+  pressure?: number | null;
   heatLevel: number | null;
   sensor: string;
   location: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  bearing?: number | null;
   batteryPercentage: number | null;
   filename: string | null;
+  fileType?: string | null;
   imageBlobUrl: string | null;
   aiProcessed?: boolean | null;
   jsonProcessed?: boolean | null;
   uploaded?: boolean | null;
+  upload?: string | null;
   voltage?: number | null;
+  tag?: string | null;
+  uploadLagSeconds?: number | null;
+  aiLagSeconds?: number | null;
+  processingLagSeconds?: number | null;
+  lowLightFlag?: boolean;
+  operationalStatus?: string;
+  anomalyFlag?: boolean;
+  anomalyScore?: number;
+  healthScore?: number;
+  dataQualityFlags?: string[];
 };
 
 export type EventsResponse = {
@@ -202,4 +249,217 @@ export type EventsResponse = {
   pageSize: number;
   total: number;
   rows: EventRecord[];
+};
+
+export type OverviewKpis = {
+  totalEvents: number;
+  activeCameras: number;
+  wildlifeSharePct: number;
+  humanSharePct: number;
+  aiProcessedPct: number;
+  jsonProcessedPct: number;
+  uploadSuccessPct: number;
+  avgUploadLagSeconds: number | null;
+  avgProcessingLagSeconds: number | null;
+  camerasWithAlerts: number;
+  avgVoltage: number | null;
+  lowLightSharePct: number;
+};
+
+export type CameraHealthRow = {
+  cameraName: string;
+  lastSeen: string | null;
+  lastSeenHoursAgo: number | null;
+  totalEvents: number;
+  aiProcessedPct: number;
+  jsonProcessedPct: number;
+  uploadSuccessPct: number;
+  avgUploadLagSeconds: number | null;
+  avgAiLagSeconds: number | null;
+  avgProcessingLagSeconds: number | null;
+  avgVoltage: number | null;
+  healthScore: number;
+  anomalyScore: number;
+  status: string;
+  alertReason: string | null;
+};
+
+export type ProcessingFunnelPoint = {
+  stage: string;
+  count: number;
+};
+
+export type LagTrendPoint = {
+  date: string;
+  avgUploadLagSeconds: number | null;
+  avgAiLagSeconds: number | null;
+  avgProcessingLagSeconds: number | null;
+};
+
+export type StaleCameraPoint = {
+  cameraName: string;
+  lastSeen: string | null;
+  lastSeenHoursAgo: number | null;
+  status: string;
+  anomalyScore: number;
+};
+
+export type CategoryDistributionPoint = {
+  category: string;
+  count: number;
+};
+
+export type CategoryTrendPoint = {
+  date: string;
+  wildlife: number;
+  human: number;
+  vehicle: number;
+  emptyScene: number;
+  unknown: number;
+};
+
+export type TopCameraPoint = {
+  cameraName: string;
+  count: number;
+};
+
+export type HourlyActivityPoint = {
+  hour: number;
+  total: number;
+  wildlife: number;
+  human: number;
+  vehicle: number;
+  emptyScene: number;
+  unknown: number;
+};
+
+export type BurstDistributionPoint = {
+  burstSize: number;
+  count: number;
+};
+
+export type VoltageTrendPoint = {
+  date: string;
+  cameraName: string;
+  avgVoltage: number | null;
+};
+
+export type LightSplitPoint = {
+  bucket: string;
+  count: number;
+};
+
+export type TemperatureTrendPoint = {
+  date: string;
+  avgTemperature: number | null;
+  avgHeatLevel: number | null;
+};
+
+export type OverviewResponse = {
+  kpis: OverviewKpis;
+  cameraHealth: CameraHealthRow[];
+  processingFunnel: ProcessingFunnelPoint[];
+  lagTrend: LagTrendPoint[];
+  staleCameras: StaleCameraPoint[];
+  categoryDistribution: CategoryDistributionPoint[];
+  categoryTrend: CategoryTrendPoint[];
+  topCameras: TopCameraPoint[];
+  hourlyActivity: HourlyActivityPoint[];
+  burstDistribution: BurstDistributionPoint[];
+  notableEvents: EventRecord[];
+  voltageTrend: VoltageTrendPoint[];
+  lightSplit: LightSplitPoint[];
+  temperatureTrend: TemperatureTrendPoint[];
+  insights: InsightItem[];
+};
+
+export type HeatmapCountPoint = {
+  row: string;
+  column: string;
+  count: number;
+};
+
+export type DiversityPoint = {
+  cameraName: string;
+  diversityScore: number;
+  wildlifeRatioPct: number;
+  humanRatioPct: number;
+  lowLightSharePct: number;
+  avgVoltage: number | null;
+  totalEvents: number;
+};
+
+export type EnvironmentalContextPoint = {
+  category: string;
+  avgLux: number | null;
+  avgTemperature: number | null;
+  avgHeatLevel: number | null;
+};
+
+export type CameraAnomalyPoint = {
+  cameraName: string;
+  anomalyScore: number;
+  healthScore: number;
+  staleHours: number | null;
+  avgLagSeconds: number | null;
+  lowVoltageRatePct: number;
+  missingAiRatePct: number;
+  suspiciousTelemetryCount: number;
+  status: string;
+};
+
+export type AnomalyTimelinePoint = {
+  date: string;
+  anomalyCount: number;
+  avgAnomalyScore: number;
+};
+
+export type ForecastPoint = {
+  date: string;
+  actual: number;
+  expected: number;
+  delta: number;
+};
+
+export type CameraClusterPoint = {
+  cameraName: string;
+  cluster: string;
+  similarityLabel: string;
+  rationale: string;
+  healthScore: number;
+  anomalyScore: number;
+  diversityScore: number;
+};
+
+export type FieldCompletenessPoint = {
+  field: string;
+  completenessPct: number;
+};
+
+export type CountLabelPoint = {
+  label: string;
+  count: number;
+};
+
+export type DataQualityResponse = {
+  missingAnalysisRatePct: number;
+  parseSuccessPct: number;
+  fieldCompleteness: FieldCompletenessPoint[];
+  suspiciousValueCounts: CountLabelPoint[];
+  pipelineConsistency: CountLabelPoint[];
+};
+
+export type AnalyticsLabResponse = {
+  hourCategoryHeatmap: HeatmapCountPoint[];
+  cameraCategoryHeatmap: HeatmapCountPoint[];
+  dailySeasonality: CategoryTrendPoint[];
+  burstBehavior: Array<{ cameraName: string; avgBurstSize: number; p95BurstSize: number; eventCount: number }>;
+  diversityByCamera: DiversityPoint[];
+  humanWildlifeRatioByCamera: Array<{ cameraName: string; wildlifePct: number; humanPct: number; vehiclePct: number }>;
+  environmentalContext: EnvironmentalContextPoint[];
+  cameraAnomalies: CameraAnomalyPoint[];
+  anomalyTimeline: AnomalyTimelinePoint[];
+  forecast: ForecastPoint[];
+  cameraClusters: CameraClusterPoint[];
+  dataQuality: DataQualityResponse;
 };
