@@ -55,7 +55,7 @@ const createRelation = (relation: CatalogRelationInput): QueryRelationMetadata =
 });
 
 const DEFAULT_LIMIT = 100;
-const MAX_LIMIT = 500;
+const MAX_LIMIT = 1200;
 
 const relations: QueryRelationMetadata[] = [
   createRelation({
@@ -94,7 +94,7 @@ const relations: QueryRelationMetadata[] = [
     description: "Camera lookup and device context metadata.",
     category: "preferred",
     defaultLimit: 50,
-    maxLimit: 100,
+    maxLimit: MAX_LIMIT,
     defaultColumns: ["camera_name", "mac", "location_name", "camera_profile"],
     supportsAggregates: true,
     supportsGroupBy: true,
@@ -115,7 +115,7 @@ const relations: QueryRelationMetadata[] = [
     description: "Event-level rows for deeper inspection. Explicit columns are required and row limits are enforced.",
     category: "advanced",
     defaultLimit: 100,
-    maxLimit: 250,
+    maxLimit: MAX_LIMIT,
     defaultColumns: ["timestamp", "camera_name", "event", "subject_category", "analysis_title"],
     supportsAggregates: true,
     supportsGroupBy: true,
