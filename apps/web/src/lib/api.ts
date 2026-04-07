@@ -11,8 +11,11 @@ import type {
   KpiResponse,
   MonthlyActivityCategoryPoint,
   OverviewResponse,
+  QueryMetadataResponse,
+  QueryRunResponse,
   SubjectCameraHeatmapPoint,
-  TimeOfDayCompositionPoint
+  TimeOfDayCompositionPoint,
+  QueryValidationResponse
 } from "@grizcam/shared";
 import { appEnv } from "./env";
 
@@ -41,10 +44,26 @@ const fetchJson = async <T>(path: string, filters?: DashboardFilters | EventQuer
   const query = filters ? buildParams(filters) : "";
   const url = `${appEnv.apiBaseUrl}${path}${query ? `?${query}` : ""}`;
   const response = await fetch(url);
+  const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(payload?.error ?? payload?.issues?.[0]?.message ?? `Request failed: ${response.status}`);
   }
-  return response.json() as Promise<T>;
+  return payload as T;
+};
+
+const postJson = async <T>(path: string, body: unknown): Promise<T> => {
+  const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    return payload as T;
+  }
+  return payload as T;
 };
 
 export const api = {
@@ -61,6 +80,9 @@ export const api = {
   analyticsLab: (filters: DashboardFilters) => fetchJson<AnalyticsLabResponse>("/api/analytics-lab", filters),
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),
+  queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
+  validateQuery: (sql: string) => postJson<QueryValidationResponse>("/api/query/validate", { sql }),
+  runQuery: (sql: string) => postJson<QueryRunResponse>("/api/query/run", { sql }),
   exportUrl: (filters: EventQuery) => `${appEnv.apiBaseUrl}/api/events/export?${buildParams(filters)}`,
   exportsEnabled: appEnv.exportsEnabled
 };

@@ -522,3 +522,144 @@ export type AnalyticsLabResponse = {
   cameraClusters: CameraClusterPoint[];
   dataQuality: DataQualityResponse;
 };
+
+export type QueryColumnType = "text" | "number" | "date" | "timestamp" | "boolean" | "json";
+
+export type QueryOperator =
+  | "="
+  | "!="
+  | ">"
+  | ">="
+  | "<"
+  | "<="
+  | "IN"
+  | "LIKE"
+  | "ILIKE"
+  | "IS NULL"
+  | "IS NOT NULL"
+  | "BETWEEN";
+
+export type QueryAggregate = "COUNT" | "AVG" | "MIN" | "MAX" | "SUM";
+
+export type QueryColumnMetadata = {
+  name: string;
+  label: string;
+  type: QueryColumnType;
+  description?: string;
+  filterOperators: QueryOperator[];
+  aggregates: QueryAggregate[];
+  groupable: boolean;
+  sortable: boolean;
+};
+
+export type QueryRelationMetadata = {
+  name: string;
+  label: string;
+  description: string;
+  category: "preferred" | "advanced";
+  defaultLimit: number;
+  maxLimit: number;
+  columns: QueryColumnMetadata[];
+  defaultColumns: string[];
+  supportsAggregates: boolean;
+  supportsGroupBy: boolean;
+};
+
+export type QueryExample = {
+  id: string;
+  label: string;
+  description: string;
+  relation: string;
+  sql: string;
+};
+
+export type QueryMetadataResponse = {
+  relations: QueryRelationMetadata[];
+  allowedAggregates: QueryAggregate[];
+  maxLimit: number;
+  defaultLimit: number;
+  examples: QueryExample[];
+  helpText: {
+    title: string;
+    body: string;
+  };
+};
+
+export type QueryBuilderAggregate = {
+  column: string;
+  func: QueryAggregate;
+  alias?: string;
+};
+
+export type QueryBuilderFilter = {
+  id: string;
+  column: string;
+  operator: QueryOperator;
+  value?: string;
+  secondValue?: string;
+};
+
+export type QueryBuilderSort = {
+  column: string;
+  direction: "asc" | "desc";
+};
+
+export type QueryBuilderState = {
+  relation: string;
+  columns: string[];
+  aggregates: QueryBuilderAggregate[];
+  filters: QueryBuilderFilter[];
+  groupBy: string[];
+  sort: QueryBuilderSort[];
+  limit: number;
+};
+
+export type QueryErrorCode =
+  | "EMPTY_QUERY"
+  | "COMMENT_NOT_ALLOWED"
+  | "MULTI_STATEMENT_NOT_ALLOWED"
+  | "NON_SELECT_NOT_ALLOWED"
+  | "UNSAFE_KEYWORD"
+  | "SYSTEM_SCHEMA_BLOCKED"
+  | "RELATION_NOT_ALLOWED"
+  | "COLUMN_NOT_ALLOWED"
+  | "FUNCTION_NOT_ALLOWED"
+  | "SELECT_ALL_NOT_ALLOWED"
+  | "JOIN_NOT_ALLOWED"
+  | "LIMIT_TOO_HIGH"
+  | "INVALID_LIMIT"
+  | "INVALID_QUERY"
+  | "QUERY_TIMEOUT"
+  | "EXECUTION_ERROR";
+
+export type QueryValidationIssue = {
+  code: QueryErrorCode;
+  message: string;
+};
+
+export type QueryValidationResponse = {
+  ok: boolean;
+  normalizedSql?: string;
+  appliedLimit?: number;
+  issues: QueryValidationIssue[];
+};
+
+export type QueryRunRequest = {
+  sql: string;
+};
+
+export type QueryResultColumn = {
+  name: string;
+  label: string;
+};
+
+export type QueryRunResponse = {
+  ok: boolean;
+  normalizedSql?: string;
+  appliedLimit?: number;
+  durationMs?: number;
+  rowCount?: number;
+  columns?: QueryResultColumn[];
+  rows?: Array<Record<string, unknown>>;
+  issues: QueryValidationIssue[];
+};

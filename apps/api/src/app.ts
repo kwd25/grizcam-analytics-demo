@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { ZodError } from "zod";
 import { appConfig } from "./config.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { queryRouter } from "./routes/query.js";
 
 const buildCorsOrigin = () => {
   if (!appConfig.isProduction) {
@@ -51,6 +52,7 @@ export const createApp = () => {
   app.use(express.json({ limit: "100kb" }));
 
   app.use("/api", dashboardRouter);
+  app.use("/api/query", queryRouter);
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {
