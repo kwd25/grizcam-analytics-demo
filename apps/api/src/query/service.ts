@@ -4,6 +4,7 @@ import type {
   QueryValidationIssue,
   QueryValidationResponse
 } from "@grizcam/shared";
+import type { FieldDef, PoolClient } from "pg";
 import { parse, toSql, type Expr, type From, type FromTable, type SelectFromStatement, type SelectStatement, type Statement } from "pgsql-ast-parser";
 import { pool } from "../db.js";
 import { queryCatalog } from "./catalog.js";
@@ -471,15 +472,17 @@ export const runSafeQuery = async (sql: string): Promise<QueryRunResponse> => {
     };
   }
 
-  const client = await pool.connect();
+  let client: PoolClient | null = null;
   try {
-    await client.query("begin read only");
-    await client.query(`set local statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
+    client = await pool.connect();
+    const dbClient = client;
+    await dbClient.query("begin read only");
+    await dbClient.query(`set local statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
 
     const startedAt = Date.now();
-    const result = await client.query(validation.normalizedSql);
+    const result = await dbClient.query(validation.normalizedSql);
     const durationMs = Date.now() - startedAt;
-    await client.query("rollback");
+    await dbClient.query("rollback");
 
     return {
       ok: true,
@@ -487,19 +490,35 @@ export const runSafeQuery = async (sql: string): Promise<QueryRunResponse> => {
       appliedLimit: validation.appliedLimit,
       durationMs,
       rowCount: result.rowCount ?? result.rows.length,
-      columns: mapColumns(result.fields.map((field) => field.name)),
+      columns: mapColumns(result.fields.map((field: FieldDef) => field.name)),
       rows: result.rows as Array<Record<string, unknown>>,
       issues: []
     };
   } catch (error) {
-    try {
-      await client.query("rollback");
-    } catch {
-      // ignore rollback failures after query errors
+    if (client) {
+      try {
+        await client.query("rollback");
+      } catch {
+        // ignore rollback failures after query errors
+      }
     }
 
-    const message = error instanceof Error ? error.message : "Query execution failed.";
-    const code = /statement timeout/i.test(message) ? "QUERY_TIMEOUT" : "EXECUTION_ERROR";
+    const rawMessage = error instanceof Error ? error.message : "Query execution failed.";
+    const lowerMessage = rawMessage.toLowerCase();
+    const timedOut = /statement timeout|canceling statement due to statement timeout/.test(lowerMessage);
+    const connectionIssue =
+      !client ||
+      /connection|econnrefused|connect|terminating connection|remaining connection slots|timeout expired|database system is starting up/.test(
+        lowerMessage
+      );
+
+    const code = timedOut ? "QUERY_TIMEOUT" : "EXECUTION_ERROR";
+    const message = timedOut
+      ? `The query took too long and was stopped after ${STATEMENT_TIMEOUT_MS / 1000} seconds. Try adding filters or lowering the limit.`
+      : connectionIssue
+        ? "The query service could not reach the database. Please retry in a moment."
+        : rawMessage;
+
     return {
       ok: false,
       normalizedSql: validation.normalizedSql,
@@ -507,6 +526,6 @@ export const runSafeQuery = async (sql: string): Promise<QueryRunResponse> => {
       issues: [{ code, message }]
     };
   } finally {
-    client.release();
+    client?.release();
   }
 };
