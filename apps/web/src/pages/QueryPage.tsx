@@ -239,6 +239,93 @@ const QueryIssues = ({ issues, tone = "danger" }: { issues?: QueryValidationIssu
     </div>
   ) : null;
 
+const SelectionPills = ({
+  values,
+  emptyLabel
+}: {
+  values: string[];
+  emptyLabel: string;
+}) => (
+  <div className="flex flex-wrap gap-2">
+    {values.length > 0 ? (
+      values.map((value) => (
+        <span key={value} className="rounded-full border border-white/10 bg-slate-950/60 px-2.5 py-1 text-xs text-slate-300">
+          {value}
+        </span>
+      ))
+    ) : (
+      <span className="text-xs text-slate-500">{emptyLabel}</span>
+    )}
+  </div>
+);
+
+const MultiSelectDropdown = ({
+  title,
+  subtitle,
+  values,
+  options,
+  onToggle,
+  onReset,
+  emptyLabel
+}: {
+  title: string;
+  subtitle: string;
+  values: string[];
+  options: Array<{ name: string; label: string }>;
+  onToggle: (name: string) => void;
+  onReset?: () => void;
+  emptyLabel: string;
+}) => (
+  <details className="group rounded-2xl border border-white/10 bg-white/5">
+    <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-3">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-white">{title}</div>
+        <div className="mt-1 text-xs text-slate-400">{subtitle}</div>
+        <div className="mt-3">
+          <SelectionPills values={values} emptyLabel={emptyLabel} />
+        </div>
+      </div>
+      <div className="flex items-center gap-2 pl-3">
+        <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] text-emerald-100">
+          {values.length} selected
+        </span>
+        <span className="text-slate-400 transition group-open:rotate-180">⌄</span>
+      </div>
+    </summary>
+    <div className="border-t border-white/10 px-4 py-4">
+      <div className="mb-3 flex items-center justify-end">
+        {onReset ? (
+          <button
+            onClick={onReset}
+            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+          >
+            Reset
+          </button>
+        ) : null}
+      </div>
+      <div className="grid max-h-64 gap-2 overflow-auto pr-1 md:grid-cols-2">
+        {options.map((option) => {
+          const checked = values.includes(option.name);
+          return (
+            <label
+              key={option.name}
+              className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-slate-950/40 px-3 py-2 text-sm text-slate-200"
+            >
+              <span className="truncate">{option.label}</span>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggle(option.name)}
+                className="h-4 w-4 rounded border-white/20 bg-transparent text-emerald-400"
+              />
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  </details>
+);
+
 const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
   if (!error) {
     return [];
@@ -556,59 +643,70 @@ export const QueryPage = () => {
                 </label>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">Selectable columns</div>
-                    <div className="mt-1 text-xs text-slate-400">{relation.description}</div>
-                  </div>
-                  <button
-                    onClick={() =>
-                      setBuilderState((current) =>
-                        current
-                          ? {
-                              ...current,
-                              columns: relation.defaultColumns,
-                              groupBy: []
-                            }
-                          : current
-                      )
-                    }
-                    className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                  >
-                    Reset columns
-                  </button>
-                </div>
-                <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                  {relation.columns.map((column) => {
-                    const checked = builderState.columns.includes(column.name);
-                    return (
-                      <label key={column.name} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-slate-950/40 px-3 py-2 text-sm text-slate-200">
-                        <span>{column.label}</span>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    columns: checked
-                                      ? current.columns.filter((name) => name !== column.name)
-                                      : [...current.columns, column.name]
-                                  }
-                                : current
-                            )
+              <div className="grid gap-4 lg:grid-cols-2">
+                <MultiSelectDropdown
+                  title="Selectable columns"
+                  subtitle={relation.description}
+                  values={builderState.columns}
+                  options={relation.columns.map((column) => ({ name: column.name, label: column.label }))}
+                  onToggle={(name) =>
+                    setBuilderState((current) =>
+                      current
+                        ? {
+                            ...current,
+                            columns: current.columns.includes(name)
+                              ? current.columns.filter((value) => value !== name)
+                              : [...current.columns, name]
                           }
-                          className="h-4 w-4 rounded border-white/20 bg-transparent text-emerald-400"
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
+                        : current
+                    )
+                  }
+                  onReset={() =>
+                    setBuilderState((current) =>
+                      current
+                        ? {
+                            ...current,
+                            columns: relation.defaultColumns,
+                            groupBy: current.groupBy.filter((column) => relation.defaultColumns.includes(column))
+                          }
+                        : current
+                    )
+                  }
+                  emptyLabel="No columns selected yet."
+                />
+
+                <MultiSelectDropdown
+                  title="Group by"
+                  subtitle="Choose dimensions for aggregate breakouts."
+                  values={builderState.groupBy}
+                  options={relation.columns.filter((column) => column.groupable).map((column) => ({ name: column.name, label: column.label }))}
+                  onToggle={(name) =>
+                    setBuilderState((current) =>
+                      current
+                        ? {
+                            ...current,
+                            groupBy: current.groupBy.includes(name)
+                              ? current.groupBy.filter((value) => value !== name)
+                              : [...current.groupBy, name]
+                          }
+                        : current
+                    )
+                  }
+                  onReset={() =>
+                    setBuilderState((current) =>
+                      current
+                        ? {
+                            ...current,
+                            groupBy: []
+                          }
+                        : current
+                    )
+                  }
+                  emptyLabel="No grouping applied."
+                />
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-sm font-medium text-white">Aggregates</div>
                   <div className="mt-1 text-xs text-slate-400">Optional rollups for counts and telemetry summaries.</div>
@@ -700,40 +798,6 @@ export const QueryPage = () => {
                     >
                       Add aggregate
                     </button>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-sm font-medium text-white">Group by</div>
-                  <div className="mt-1 text-xs text-slate-400">Used when you want aggregate values broken out by selected dimensions.</div>
-                  <div className="mt-4 space-y-2">
-                    {relation.columns
-                      .filter((column) => column.groupable)
-                      .map((column) => {
-                        const checked = builderState.groupBy.includes(column.name);
-                        return (
-                          <label key={column.name} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-slate-950/40 px-3 py-2 text-sm text-slate-200">
-                            <span>{column.label}</span>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() =>
-                                setBuilderState((current) =>
-                                  current
-                                    ? {
-                                        ...current,
-                                        groupBy: checked
-                                          ? current.groupBy.filter((name) => name !== column.name)
-                                          : [...current.groupBy, column.name]
-                                      }
-                                    : current
-                                )
-                              }
-                              className="h-4 w-4 rounded border-white/20 bg-transparent text-emerald-400"
-                            />
-                          </label>
-                        );
-                      })}
                   </div>
                 </div>
               </div>
