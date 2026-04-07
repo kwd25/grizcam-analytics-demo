@@ -366,7 +366,7 @@ const CompactExampleRail = ({
   <aside className="panel rounded-[28px] p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-auto">
     <div className="mb-4">
       <h2 className="text-xl font-semibold text-white">Examples</h2>
-      <p className="mt-1 text-sm text-slate-400">Compact starter queries for quick analyst workflows.</p>
+      <p className="mt-1 text-sm text-slate-400">Start with a sample query, then adjust the filters, columns, or SQL to fit your question.</p>
     </div>
     <div className="space-y-2">
       {examples.map((example) => (
@@ -375,14 +375,9 @@ const CompactExampleRail = ({
           onClick={() => onSelect(example.id, example.sql)}
           className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:bg-white/10"
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-white">{example.label}</div>
-              <div className="mt-1 line-clamp-2 text-xs text-slate-400">{example.description}</div>
-            </div>
-            <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
-              {example.relation}
-            </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-white">{example.label}</div>
+            <div className="mt-1 line-clamp-2 text-xs text-slate-400">{example.description}</div>
           </div>
         </button>
       ))}
@@ -692,7 +687,7 @@ export const QueryPage = () => {
   return (
     <AppShell
       title="Query"
-      subtitle="Build safe read-only SQL against approved analytics relations. Use the guided builder, inspect the generated SQL, and run validated queries with enforced limits."
+      subtitle="Explore approved analytics data with read-only SQL, guided filters, and validated query results."
       badge={`${appEnv.demoLabel} • Read-only workspace`}
       aside={
         metadataQuery.isError ? (
@@ -727,7 +722,7 @@ export const QueryPage = () => {
       <div className="grid gap-4">
         <SectionCard
           title="Query Builder"
-          subtitle="Ultra-compact controls for approved relations, grouped metrics, filters, and sort rules."
+          subtitle="Choose a dataset, pick the fields you want, and narrow the results with filters, grouping, and sorting."
         >
           {metadataQuery.isError ? (
             <QueryIssues issues={metadataIssues} />
@@ -1140,7 +1135,7 @@ export const QueryPage = () => {
 
         <SectionCard
           title="SQL Editor"
-          subtitle="Inspect the generated SQL, tweak it manually when needed, and validate before running."
+          subtitle="Write or edit a query, validate it, and run it when it looks right."
           actions={
             <div className="flex flex-wrap gap-2">
               <span
@@ -1164,10 +1159,10 @@ export const QueryPage = () => {
             </div>
           }
         >
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-              Read-only SELECT queries only. The backend now supports approved joins, non-recursive CTEs, subqueries, aliases, unions, grouping, and safe aggregate functions across curated relations.
-            </div>
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                Use read-only SELECT queries only. You can filter, group, join approved datasets, and work with CTEs or subqueries.
+              </div>
             <textarea
               value={sql}
               onChange={(event) => {
