@@ -12,11 +12,12 @@ import type {
 } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { SectionCard } from "../components/SectionCard";
-import { api } from "../lib/api";
+import { api, QueryRequestError } from "../lib/api";
 import { appEnv } from "../lib/env";
 import { classNames, formatNumber } from "../lib/utils";
 
 const DISALLOWED_SQL = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|comment)\b/i;
+type RequestStatus = "idle" | "validating" | "running" | "success" | "error" | "timeout";
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
 const formatOperatorLabel = (value: string) => value.replace(/_/g, " ");
@@ -238,7 +239,45 @@ const QueryIssues = ({ issues, tone = "danger" }: { issues: QueryValidationIssue
     </div>
   ) : null;
 
-const ResultsTable = ({ result }: { result?: QueryRunResponse | null }) => {
+const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
+  if (!error) {
+    return [];
+  }
+
+  if (error instanceof QueryRequestError) {
+    return [
+      {
+        code: error.code === "TIMEOUT" ? "QUERY_TIMEOUT" : "EXECUTION_ERROR",
+        message: error.message
+      }
+    ];
+  }
+
+  if (error instanceof Error) {
+    return [{ code: "EXECUTION_ERROR", message: error.message }];
+  }
+
+  return [{ code: "EXECUTION_ERROR", message: "The query failed unexpectedly. Please retry." }];
+};
+
+const ResultsTable = ({
+  result,
+  status,
+  overlayText
+}: {
+  result?: QueryRunResponse | null;
+  status: RequestStatus;
+  overlayText?: string;
+}) => {
+  if (!result && status === "running") {
+    return (
+      <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-10 text-center text-sm text-emerald-100">
+        <div className="text-base font-medium">Running query…</div>
+        <div className="mt-2 text-sm text-emerald-50/90">Queries auto-stop after 10 seconds if the response does not come back.</div>
+      </div>
+    );
+  }
+
   if (!result) {
     return (
       <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-400">
@@ -260,7 +299,7 @@ const ResultsTable = ({ result }: { result?: QueryRunResponse | null }) => {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="relative space-y-3">
       <div className="flex flex-wrap gap-3 text-xs text-slate-400">
         <span>{formatNumber(result.rowCount ?? 0, 0)} rows</span>
         <span>{formatNumber(result.durationMs ?? 0, 0)} ms</span>
@@ -290,6 +329,14 @@ const ResultsTable = ({ result }: { result?: QueryRunResponse | null }) => {
           </tbody>
         </table>
       </div>
+      {status === "running" ? (
+        <div className="absolute inset-0 flex items-center justify-center rounded-2xl border border-emerald-400/20 bg-slate-950/75 backdrop-blur-sm">
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-5 py-4 text-center text-sm text-emerald-100">
+            <div className="font-medium">{overlayText ?? "Running query…"}</div>
+            <div className="mt-2 text-xs text-emerald-50/90">Queries auto-stop after 10 seconds if the response hangs.</div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
@@ -312,6 +359,8 @@ export const QueryPage = () => {
   const [isCustomSql, setIsCustomSql] = useState(false);
   const [lastValidation, setLastValidation] = useState<QueryValidationResponse | null>(null);
   const [lastResult, setLastResult] = useState<QueryRunResponse | null>(null);
+  const [requestStatus, setRequestStatus] = useState<RequestStatus>("idle");
+  const [requestIssues, setRequestIssues] = useState<QueryValidationIssue[]>([]);
 
   useEffect(() => {
     if (!metadata || builderState) {
@@ -351,8 +400,9 @@ export const QueryPage = () => {
 
   const generatedSql = useMemo(() => buildBuilderSql(metadata, builderState), [metadata, builderState]);
   const clientIssues = useMemo(() => frontendLint(sql), [sql]);
-  const latestIssues = runMutation.data?.issues?.length ? runMutation.data.issues : lastValidation?.issues ?? [];
+  const latestIssues = requestIssues.length > 0 ? requestIssues : lastValidation?.issues ?? [];
   const canRun = clientIssues.length === 0 && sql.trim().length > 0;
+  const metadataIssues = useMemo(() => normalizeRequestIssues(metadataQuery.error), [metadataQuery.error]);
 
   useEffect(() => {
     if (!generatedSql) {
@@ -403,19 +453,41 @@ export const QueryPage = () => {
   };
 
   const runValidation = async () => {
-    const result = await validateMutation.mutateAsync(sql);
-    setLastValidation(result);
-    if (result.ok && result.normalizedSql) {
-      setSql(result.normalizedSql);
+    setRequestStatus("validating");
+    setRequestIssues([]);
+
+    try {
+      const result = await validateMutation.mutateAsync(sql);
+      setLastValidation(result);
+      setRequestStatus(result.ok ? "success" : "error");
+      if (result.ok && result.normalizedSql) {
+        setSql(result.normalizedSql);
+      }
+    } catch (error) {
+      const issues = normalizeRequestIssues(error);
+      setLastValidation({ ok: false, issues });
+      setRequestIssues(issues);
+      setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
     }
   };
 
   const runQuery = async () => {
-    const result = await runMutation.mutateAsync(sql);
-    setLastResult(result);
-    setLastValidation(result);
-    if (result.normalizedSql) {
-      setSql(result.normalizedSql);
+    setRequestStatus("running");
+    setRequestIssues([]);
+
+    try {
+      const result = await runMutation.mutateAsync(sql);
+      setLastResult(result);
+      setLastValidation(result);
+      setRequestStatus(result.ok ? "success" : result.issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
+      if (result.normalizedSql) {
+        setSql(result.normalizedSql);
+      }
+    } catch (error) {
+      const issues = normalizeRequestIssues(error);
+      setLastValidation({ ok: false, issues });
+      setRequestIssues(issues);
+      setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
     }
   };
 
@@ -434,11 +506,14 @@ export const QueryPage = () => {
           {metadata?.helpText.body ??
             "The backend validates every query before execution. Comments, write statements, unsafe relations, and oversized limits are blocked server-side."}
         </p>
+        {metadataQuery.isError ? <div className="mt-4"><QueryIssues issues={metadataIssues} /></div> : null}
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
         <SectionCard title="Query Builder" subtitle="Choose an approved relation, columns, filters, grouping, sort, and a capped row limit.">
-          {!metadata || !builderState || !relation ? (
+          {metadataQuery.isError ? (
+            <QueryIssues issues={metadataIssues} />
+          ) : !metadata || !builderState || !relation ? (
             <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-400">
               Loading the approved query catalog…
             </div>
@@ -906,21 +981,21 @@ export const QueryPage = () => {
               <div className="flex flex-wrap gap-3">
                 <button
                   onClick={runValidation}
-                  disabled={validateMutation.isPending || sql.trim().length === 0}
+                  disabled={requestStatus === "validating" || requestStatus === "running" || sql.trim().length === 0}
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {validateMutation.isPending ? "Validating…" : "Validate query"}
+                  {requestStatus === "validating" ? "Validating…" : "Validate query"}
                 </button>
                 <button
                   onClick={runQuery}
-                  disabled={!canRun || runMutation.isPending}
+                  disabled={!canRun || requestStatus === "running" || requestStatus === "validating"}
                   className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {runMutation.isPending ? "Running…" : "Run query"}
+                  {requestStatus === "running" ? "Running…" : "Run query"}
                 </button>
               </div>
               <QueryIssues issues={clientIssues} />
-              {latestIssues.length > 0 && !runMutation.isPending && !validateMutation.isPending ? <QueryIssues issues={latestIssues} /> : null}
+              {latestIssues.length > 0 && requestStatus !== "running" && requestStatus !== "validating" ? <QueryIssues issues={latestIssues} /> : null}
               {lastValidation?.ok ? (
                 <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
                   Validation passed. The backend will execute the normalized read-only query with a limit of {formatNumber(lastValidation.appliedLimit ?? 0, 0)} rows.
@@ -964,7 +1039,11 @@ export const QueryPage = () => {
       </div>
 
       <SectionCard title="Results" subtitle="Validated query output appears here with row counts, timing, and the applied row cap.">
-        <ResultsTable result={lastResult} />
+        <ResultsTable
+          result={lastResult}
+          status={requestStatus}
+          overlayText={requestStatus === "running" ? "Running query…" : requestStatus === "validating" ? "Validating query…" : undefined}
+        />
       </SectionCard>
     </AppShell>
   );

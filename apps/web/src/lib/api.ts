@@ -19,6 +19,20 @@ import type {
 } from "@grizcam/shared";
 import { appEnv } from "./env";
 
+export type QueryRequestErrorCode = "TIMEOUT" | "NETWORK" | "INVALID_RESPONSE";
+
+export class QueryRequestError extends Error {
+  code: QueryRequestErrorCode;
+
+  constructor(code: QueryRequestErrorCode, message: string) {
+    super(message);
+    this.name = "QueryRequestError";
+    this.code = code;
+  }
+}
+
+const QUERY_REQUEST_TIMEOUT_MS = 10_000;
+
 const buildParams = (filters: DashboardFilters | EventQuery) => {
   const params = new URLSearchParams();
 
@@ -51,19 +65,45 @@ const fetchJson = async <T>(path: string, filters?: DashboardFilters | EventQuer
   return payload as T;
 };
 
-const postJson = async <T>(path: string, body: unknown): Promise<T> => {
-  const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
+const postQueryJson = async <T>(path: string, body: unknown): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), QUERY_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      if (payload && typeof payload === "object") {
+        return payload as T;
+      }
+      throw new QueryRequestError("INVALID_RESPONSE", `The query service returned HTTP ${response.status}.`);
+    }
+
+    if (!payload || typeof payload !== "object") {
+      throw new QueryRequestError("INVALID_RESPONSE", "The query service returned an invalid response.");
+    }
+
     return payload as T;
+  } catch (error) {
+    if (error instanceof QueryRequestError) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new QueryRequestError("TIMEOUT", "The query request took longer than 10 seconds and was stopped.");
+    }
+    throw new QueryRequestError("NETWORK", "The query service is unreachable right now. Please retry in a moment.");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  return payload as T;
 };
 
 export const api = {
@@ -81,8 +121,8 @@ export const api = {
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),
   queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
-  validateQuery: (sql: string) => postJson<QueryValidationResponse>("/api/query/validate", { sql }),
-  runQuery: (sql: string) => postJson<QueryRunResponse>("/api/query/run", { sql }),
+  validateQuery: (sql: string) => postQueryJson<QueryValidationResponse>("/api/query/validate", { sql }),
+  runQuery: (sql: string) => postQueryJson<QueryRunResponse>("/api/query/run", { sql }),
   exportUrl: (filters: EventQuery) => `${appEnv.apiBaseUrl}/api/events/export?${buildParams(filters)}`,
   exportsEnabled: appEnv.exportsEnabled
 };
