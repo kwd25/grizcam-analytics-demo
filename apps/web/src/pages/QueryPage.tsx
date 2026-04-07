@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   QueryBuilderFilter,
@@ -277,11 +277,11 @@ const MultiSelectDropdown = ({
   emptyLabel: string;
 }) => (
   <details className="group rounded-2xl border border-white/10 bg-white/5">
-    <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-3">
+    <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-3 py-2.5">
       <div className="min-w-0">
         <div className="text-sm font-medium text-white">{title}</div>
-        <div className="mt-1 text-xs text-slate-400">{subtitle}</div>
-        <div className="mt-3">
+        <div className="mt-0.5 text-[11px] text-slate-400">{subtitle}</div>
+        <div className="mt-2">
           <SelectionPills values={values} emptyLabel={emptyLabel} />
         </div>
       </div>
@@ -289,11 +289,11 @@ const MultiSelectDropdown = ({
         <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] text-emerald-100">
           {values.length} selected
         </span>
-        <span className="text-slate-400 transition group-open:rotate-180">⌄</span>
+        <span className="text-slate-400 transition group-open:rotate-180">v</span>
       </div>
     </summary>
-    <div className="border-t border-white/10 px-4 py-4">
-      <div className="mb-3 flex items-center justify-end">
+    <div className="border-t border-white/10 px-3 py-3">
+      <div className="mb-2 flex items-center justify-end">
         {onReset ? (
           <button
             onClick={onReset}
@@ -326,6 +326,70 @@ const MultiSelectDropdown = ({
   </details>
 );
 
+const CompactBuilderSection = ({
+  title,
+  subtitle,
+  summary,
+  children,
+  defaultOpen = false
+}: {
+  title: string;
+  subtitle: string;
+  summary: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) => (
+  <details className="group rounded-2xl border border-white/10 bg-white/5" open={defaultOpen}>
+    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-white">{title}</div>
+        <div className="mt-0.5 text-[11px] text-slate-400">{subtitle}</div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="max-w-[160px] truncate rounded-full border border-white/10 bg-slate-950/60 px-2.5 py-1 text-[11px] text-slate-300">
+          {summary}
+        </span>
+        <span className="text-slate-400 transition group-open:rotate-180">v</span>
+      </div>
+    </summary>
+    <div className="border-t border-white/10 px-3 py-3">{children}</div>
+  </details>
+);
+
+const CompactExampleRail = ({
+  examples,
+  onSelect
+}: {
+  examples: QueryMetadataResponse["examples"];
+  onSelect: (id: string, sql: string) => void;
+}) => (
+  <aside className="panel rounded-[28px] p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-auto">
+    <div className="mb-4">
+      <h2 className="text-xl font-semibold text-white">Examples</h2>
+      <p className="mt-1 text-sm text-slate-400">Compact starter queries for quick analyst workflows.</p>
+    </div>
+    <div className="space-y-2">
+      {examples.map((example) => (
+        <button
+          key={example.id}
+          onClick={() => onSelect(example.id, example.sql)}
+          className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:bg-white/10"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium text-white">{example.label}</div>
+              <div className="mt-1 line-clamp-2 text-xs text-slate-400">{example.description}</div>
+            </div>
+            <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+              {example.relation}
+            </span>
+          </div>
+        </button>
+      ))}
+    </div>
+  </aside>
+);
+
 const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
   if (!error) {
     return [];
@@ -345,6 +409,17 @@ const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
   }
 
   return [{ code: "EXECUTION_ERROR", message: "The query failed unexpectedly. Please retry." }];
+};
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 };
 
 const ResultsTable = ({
@@ -439,6 +514,9 @@ export const QueryPage = () => {
   const runMutation = useMutation({
     mutationFn: (sql: string) => api.runQuery(sql)
   });
+  const exportMutation = useMutation({
+    mutationFn: (sql: string) => api.exportQuery(sql)
+  });
 
   const metadata = metadataQuery.data;
   const [builderState, setBuilderState] = useState<QueryBuilderState | null>(null);
@@ -490,6 +568,10 @@ export const QueryPage = () => {
   const latestIssues = requestIssues.length > 0 ? requestIssues : lastValidation?.issues ?? [];
   const canRun = clientIssues.length === 0 && sql.trim().length > 0;
   const metadataIssues = useMemo(() => normalizeRequestIssues(metadataQuery.error), [metadataQuery.error]);
+  const canExport = sql.trim().length > 0 && clientIssues.length === 0 && requestStatus !== "running" && requestStatus !== "validating";
+  const aggregateSummary = builderState?.aggregates.length ? `${builderState.aggregates.length} aggregate${builderState.aggregates.length === 1 ? "" : "s"}` : "No aggregates";
+  const filterSummary = builderState?.filters.length ? `${builderState.filters.length} filter${builderState.filters.length === 1 ? "" : "s"}` : "No filters";
+  const sortSummary = builderState?.sort.length ? `${builderState.sort.length} sort rule${builderState.sort.length === 1 ? "" : "s"}` : "No sorting";
 
   useEffect(() => {
     if (!generatedSql) {
@@ -539,6 +621,22 @@ export const QueryPage = () => {
     );
   };
 
+  const loadExample = (id: string, fallbackSql: string) => {
+    if (!metadata) {
+      return;
+    }
+    const nextState = applyExample(metadata, id);
+    if (nextState) {
+      setBuilderState(nextState);
+      setIsCustomSql(false);
+      setSql(buildBuilderSql(metadata, nextState));
+      return;
+    }
+
+    setSql(fallbackSql);
+    setIsCustomSql(true);
+  };
+
   const runValidation = async () => {
     setRequestStatus("validating");
     setRequestIssues([]);
@@ -578,11 +676,41 @@ export const QueryPage = () => {
     }
   };
 
+  const exportResults = async () => {
+    setRequestIssues([]);
+
+    try {
+      const blob = await exportMutation.mutateAsync(sql);
+      downloadBlob(blob, "grizcam-query-results.csv");
+    } catch (error) {
+      const issues = normalizeRequestIssues(error);
+      setRequestIssues(issues);
+      setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
+    }
+  };
+
   return (
     <AppShell
       title="Query"
       subtitle="Build safe read-only SQL against approved analytics relations. Use the guided builder, inspect the generated SQL, and run validated queries with enforced limits."
       badge={`${appEnv.demoLabel} • Read-only workspace`}
+      aside={
+        metadataQuery.isError ? (
+          <CompactExampleRail
+            examples={[]}
+            onSelect={loadExample}
+          />
+        ) : metadata ? (
+          <CompactExampleRail examples={metadata.examples} onSelect={loadExample} />
+        ) : (
+          <aside className="panel rounded-[28px] p-4">
+            <div className="mb-3 text-xl font-semibold text-white">Examples</div>
+            <div className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-400">
+              Loading examples…
+            </div>
+          </aside>
+        )
+      }
     >
       <SectionCard
         title="Safety Model"
@@ -596,8 +724,11 @@ export const QueryPage = () => {
         {metadataQuery.isError ? <div className="mt-4"><QueryIssues issues={metadataIssues} /></div> : null}
       </SectionCard>
 
-      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-        <SectionCard title="Query Builder" subtitle="Choose an approved relation, columns, filters, grouping, sort, and a capped row limit.">
+      <div className="grid gap-4">
+        <SectionCard
+          title="Query Builder"
+          subtitle="Ultra-compact controls for approved relations, grouped metrics, filters, and sort rules."
+        >
           {metadataQuery.isError ? (
             <QueryIssues issues={metadataIssues} />
           ) : !metadata || !builderState || !relation ? (
@@ -605,14 +736,14 @@ export const QueryPage = () => {
               Loading the approved query catalog…
             </div>
           ) : (
-            <div className="space-y-5">
-              <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-3">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_140px]">
                 <label className="space-y-2 text-sm text-slate-300">
                   <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Relation</span>
                   <select
                     value={builderState.relation}
                     onChange={(event) => setRelation(event.target.value)}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
                   >
                     {metadata.relations.map((item) => (
                       <option key={item.name} value={item.name}>
@@ -638,12 +769,12 @@ export const QueryPage = () => {
                           : current
                       )
                     }
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
                   />
                 </label>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid gap-3 xl:grid-cols-2">
                 <MultiSelectDropdown
                   title="Selectable columns"
                   subtitle={relation.description}
@@ -706,13 +837,15 @@ export const QueryPage = () => {
                 />
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-sm font-medium text-white">Aggregates</div>
-                  <div className="mt-1 text-xs text-slate-400">Optional rollups for counts and telemetry summaries.</div>
-                  <div className="mt-4 space-y-3">
+              <div className="grid gap-3 xl:grid-cols-3">
+                <CompactBuilderSection
+                  title="Aggregates"
+                  subtitle="Optional rollups for metric summaries."
+                  summary={aggregateSummary}
+                >
+                  <div className="space-y-2">
                     {builderState.aggregates.map((aggregate, index) => (
-                      <div key={`${aggregate.column}-${index}`} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                      <div key={`${aggregate.column}-${index}`} className="grid gap-2 lg:grid-cols-[110px_minmax(0,1fr)_auto]">
                         <select
                           value={aggregate.func}
                           onChange={(event) =>
@@ -727,7 +860,7 @@ export const QueryPage = () => {
                                 : current
                             )
                           }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
                         >
                           {metadata.allowedAggregates.map((option) => (
                             <option key={option} value={option}>
@@ -749,7 +882,7 @@ export const QueryPage = () => {
                                 : current
                             )
                           }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
                         >
                           {relation.columns
                             .filter((column) => column.aggregates.length > 0)
@@ -772,7 +905,7 @@ export const QueryPage = () => {
                           }
                           className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
                         >
-                          Remove
+                          X
                         </button>
                       </div>
                     ))}
@@ -794,126 +927,129 @@ export const QueryPage = () => {
                             : current
                         )
                       }
-                      className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/10"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200 transition hover:bg-white/10"
                     >
                       Add aggregate
                     </button>
                   </div>
-                </div>
-              </div>
+                </CompactBuilderSection>
 
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">Filters</div>
-                    <div className="mt-1 text-xs text-slate-400">Builder filters become safe SQL in the editor preview below.</div>
+                <CompactBuilderSection
+                  title="Filters"
+                  subtitle="Safe row-level conditions."
+                  summary={filterSummary}
+                  defaultOpen={builderState.filters.length > 0}
+                >
+                  <div className="mb-2 flex items-center justify-end">
+                    <button
+                      onClick={() =>
+                        setBuilderState((current) =>
+                          current
+                            ? {
+                                ...current,
+                                filters: [
+                                  ...current.filters,
+                                  {
+                                    id: makeFilterId(),
+                                    column: relation.columns[0].name,
+                                    operator: relation.columns[0].filterOperators[0]
+                                  }
+                                ]
+                              }
+                            : current
+                        )
+                      }
+                      className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                    >
+                      Add filter
+                    </button>
                   </div>
-                  <button
-                    onClick={() =>
-                      setBuilderState((current) =>
-                        current
-                          ? {
-                              ...current,
-                              filters: [
-                                ...current.filters,
-                                {
-                                  id: makeFilterId(),
-                                  column: relation.columns[0].name,
-                                  operator: relation.columns[0].filterOperators[0]
+                  <div className="space-y-2">
+                    {builderState.filters.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No filters yet.</div>
+                    ) : (
+                      builderState.filters.map((filter) => {
+                        const column = relation.columns.find((item) => item.name === filter.column) ?? relation.columns[0];
+                        return (
+                          <div key={filter.id} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5">
+                            <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_130px_auto]">
+                              <select
+                                value={filter.column}
+                                onChange={(event) => {
+                                  const nextColumn = relation.columns.find((item) => item.name === event.target.value) ?? relation.columns[0];
+                                  updateFilter(filter.id, { column: nextColumn.name, operator: nextColumn.filterOperators[0], value: "", secondValue: "" });
+                                }}
+                                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                              >
+                                {relation.columns.map((item) => (
+                                  <option key={item.name} value={item.name}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                value={filter.operator}
+                                onChange={(event) => updateFilter(filter.id, { operator: event.target.value as QueryOperator })}
+                                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                              >
+                                {column.filterOperators.map((operator) => (
+                                  <option key={operator} value={operator}>
+                                    {formatOperatorLabel(operator)}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() =>
+                                  setBuilderState((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          filters: current.filters.filter((item) => item.id !== filter.id)
+                                        }
+                                      : current
+                                  )
                                 }
-                              ]
-                            }
-                          : current
-                      )
-                    }
-                    className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                  >
-                    Add filter
-                  </button>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {builderState.filters.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-4 text-sm text-slate-400">No filters yet.</div>
-                  ) : (
-                    builderState.filters.map((filter) => {
-                      const column = relation.columns.find((item) => item.name === filter.column) ?? relation.columns[0];
-                      return (
-                        <div key={filter.id} className="grid gap-2 xl:grid-cols-[1.1fr_1fr_1fr_auto]">
-                          <select
-                            value={filter.column}
-                            onChange={(event) => {
-                              const nextColumn = relation.columns.find((item) => item.name === event.target.value) ?? relation.columns[0];
-                              updateFilter(filter.id, { column: nextColumn.name, operator: nextColumn.filterOperators[0], value: "", secondValue: "" });
-                            }}
-                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                          >
-                            {relation.columns.map((item) => (
-                              <option key={item.name} value={item.name}>
-                                {item.label}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={filter.operator}
-                            onChange={(event) => updateFilter(filter.id, { operator: event.target.value as QueryOperator })}
-                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                          >
-                            {column.filterOperators.map((operator) => (
-                              <option key={operator} value={operator}>
-                                {formatOperatorLabel(operator)}
-                              </option>
-                            ))}
-                          </select>
-                          <div className={classNames("grid gap-2", filter.operator === "BETWEEN" ? "grid-cols-2" : "grid-cols-1")}>
-                            {filter.operator !== "IS NULL" && filter.operator !== "IS NOT NULL" ? (
-                              <>
-                                <input
-                                  value={filter.value ?? ""}
-                                  onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
-                                  placeholder={filter.operator === "IN" ? "value1, value2" : "Value"}
-                                  className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                                />
-                                {filter.operator === "BETWEEN" ? (
+                                className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                              >
+                                X
+                              </button>
+                            </div>
+                            <div className={classNames("grid gap-2", filter.operator === "BETWEEN" ? "md:grid-cols-2" : "grid-cols-1")}>
+                              {filter.operator !== "IS NULL" && filter.operator !== "IS NOT NULL" ? (
+                                <>
                                   <input
-                                    value={filter.secondValue ?? ""}
-                                    onChange={(event) => updateFilter(filter.id, { secondValue: event.target.value })}
-                                    placeholder="And"
-                                    className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                                    value={filter.value ?? ""}
+                                    onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
+                                    placeholder={filter.operator === "IN" ? "value1, value2" : "Value"}
+                                    className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
                                   />
-                                ) : null}
-                              </>
-                            ) : (
-                              <div className="rounded-xl border border-dashed border-white/10 px-3 py-2 text-sm text-slate-400">No value needed</div>
-                            )}
+                                  {filter.operator === "BETWEEN" ? (
+                                    <input
+                                      value={filter.secondValue ?? ""}
+                                      onChange={(event) => updateFilter(filter.id, { secondValue: event.target.value })}
+                                      placeholder="And"
+                                      className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                                    />
+                                  ) : null}
+                                </>
+                              ) : (
+                                <div className="rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-slate-400">No value needed</div>
+                              )}
+                            </div>
                           </div>
-                          <button
-                            onClick={() =>
-                              setBuilderState((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      filters: current.filters.filter((item) => item.id !== filter.id)
-                                    }
-                                  : current
-                              )
-                            }
-                            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">Sort</div>
-                    <div className="mt-1 text-xs text-slate-400">Sort on selected columns or aggregate aliases.</div>
+                        );
+                      })
+                    )}
                   </div>
+                </CompactBuilderSection>
+
+                <CompactBuilderSection
+                  title="Sort"
+                  subtitle="Selected columns or aggregate aliases."
+                  summary={sortSummary}
+                  defaultOpen={builderState.sort.length > 0}
+                >
+                  <div className="mb-2 flex items-center justify-end">
                   <button
                     onClick={() =>
                       setBuilderState((current) =>
@@ -929,180 +1065,166 @@ export const QueryPage = () => {
                   >
                     Add sort
                   </button>
-                </div>
-                <div className="mt-4 space-y-3">
+                  </div>
+                  <div className="space-y-2">
                   {builderState.sort.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-4 text-sm text-slate-400">No sort applied.</div>
+                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No sort applied.</div>
                   ) : (
                     builderState.sort.map((sort, index) => (
-                      <div key={`${sort.column}-${index}`} className="grid gap-2 md:grid-cols-[1fr_140px_auto]">
-                        <select
-                          value={sort.column}
-                          onChange={(event) =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    sort: current.sort.map((item, itemIndex) =>
-                                      itemIndex === index ? { ...item, column: event.target.value } : item
-                                    )
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                        >
-                          {sortOptions.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={sort.direction}
-                          onChange={(event) =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    sort: current.sort.map((item, itemIndex) =>
-                                      itemIndex === index ? { ...item, direction: event.target.value as "asc" | "desc" } : item
-                                    )
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                        >
-                          <option value="asc">ASC</option>
-                          <option value="desc">DESC</option>
-                        </select>
-                        <button
-                          onClick={() =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    sort: current.sort.filter((_, itemIndex) => itemIndex !== index)
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                        >
-                          Remove
-                        </button>
+                      <div key={`${sort.column}-${index}`} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5 xl:grid-cols-[minmax(0,1fr)_120px_auto]">
+                          <select
+                            value={sort.column}
+                            onChange={(event) =>
+                              setBuilderState((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      sort: current.sort.map((item, itemIndex) =>
+                                        itemIndex === index ? { ...item, column: event.target.value } : item
+                                      )
+                                    }
+                                  : current
+                              )
+                            }
+                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                          >
+                            {sortOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={sort.direction}
+                            onChange={(event) =>
+                              setBuilderState((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      sort: current.sort.map((item, itemIndex) =>
+                                        itemIndex === index ? { ...item, direction: event.target.value as "asc" | "desc" } : item
+                                      )
+                                    }
+                                  : current
+                              )
+                            }
+                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                          >
+                            <option value="asc">ASC</option>
+                            <option value="desc">DESC</option>
+                          </select>
+                          <button
+                            onClick={() =>
+                              setBuilderState((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      sort: current.sort.filter((_, itemIndex) => itemIndex !== index)
+                                    }
+                                  : current
+                              )
+                            }
+                            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                          >
+                            X
+                          </button>
                       </div>
                     ))
                   )}
-                </div>
+                  </div>
+                </CompactBuilderSection>
               </div>
             </div>
           )}
         </SectionCard>
 
-        <div className="space-y-4">
-          <SectionCard
-            title="SQL Editor"
-            subtitle="Inspect the generated SQL, tweak it manually when needed, and validate before running."
-            actions={
-              <div className="flex gap-2">
-                <span
-                  className={classNames(
-                    "rounded-full border px-3 py-1 text-xs",
-                    isCustomSql ? "border-amber-400/30 bg-amber-400/10 text-amber-100" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
-                  )}
-                >
-                  {isCustomSql ? "Custom SQL" : "Builder linked"}
-                </span>
-                <button
-                  onClick={() => {
-                    setIsCustomSql(false);
-                    setSql(generatedSql);
-                  }}
-                  disabled={!generatedSql}
-                  className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Reset to builder SQL
-                </button>
-              </div>
-            }
-          >
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Read-only SELECT queries only. The backend blocks comments, unsafe keywords, system catalogs, multi-statement SQL, and oversized limits.
-              </div>
-              <textarea
-                value={sql}
-                onChange={(event) => {
-                  const nextValue = event.target.value;
-                  setSql(nextValue);
-                  setIsCustomSql(nextValue !== generatedSql);
+        <SectionCard
+          title="SQL Editor"
+          subtitle="Inspect the generated SQL, tweak it manually when needed, and validate before running."
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <span
+                className={classNames(
+                  "rounded-full border px-3 py-1 text-xs",
+                  isCustomSql ? "border-amber-400/30 bg-amber-400/10 text-amber-100" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                )}
+              >
+                {isCustomSql ? "Custom SQL" : "Builder linked"}
+              </span>
+              <button
+                onClick={() => {
+                  setIsCustomSql(false);
+                  setSql(generatedSql);
                 }}
-                spellCheck={false}
-                className="min-h-[340px] w-full rounded-3xl border border-white/10 bg-slate-950/75 px-4 py-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-emerald-400"
-              />
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={runValidation}
-                  disabled={requestStatus === "validating" || requestStatus === "running" || sql.trim().length === 0}
-                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {requestStatus === "validating" ? "Validating…" : "Validate query"}
-                </button>
-                <button
-                  onClick={runQuery}
-                  disabled={!canRun || requestStatus === "running" || requestStatus === "validating"}
-                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {requestStatus === "running" ? "Running…" : "Run query"}
-                </button>
-              </div>
-              <QueryIssues issues={clientIssues} />
-              {latestIssues.length > 0 && requestStatus !== "running" && requestStatus !== "validating" ? <QueryIssues issues={latestIssues} /> : null}
-              {lastValidation?.ok ? (
-                <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-                  Validation passed. The backend will execute the normalized read-only query with a limit of {formatNumber(lastValidation.appliedLimit ?? 0, 0)} rows.
-                </div>
-              ) : null}
+                disabled={!generatedSql}
+                className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Reset to builder SQL
+              </button>
             </div>
-          </SectionCard>
-
-          <SectionCard title="Example Queries" subtitle="Load a starter query and then refine it with the builder or editor.">
-            {!metadata ? (
-              <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-400">
-                Loading examples…
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+              Read-only SELECT queries only. The backend now supports approved joins, non-recursive CTEs, subqueries, aliases, unions, grouping, and safe aggregate functions across curated relations.
+            </div>
+            <textarea
+              value={sql}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSql(nextValue);
+                setIsCustomSql(nextValue !== generatedSql);
+              }}
+              spellCheck={false}
+              className="min-h-[320px] w-full rounded-3xl border border-white/10 bg-slate-950/75 px-4 py-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-emerald-400"
+            />
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={runValidation}
+                disabled={requestStatus === "validating" || requestStatus === "running" || sql.trim().length === 0}
+                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {requestStatus === "validating" ? "Validating…" : "Validate query"}
+              </button>
+              <button
+                onClick={runQuery}
+                disabled={!canRun || requestStatus === "running" || requestStatus === "validating"}
+                className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {requestStatus === "running" ? "Running…" : "Run query"}
+              </button>
+              <button
+                onClick={exportResults}
+                disabled={!canExport || exportMutation.isPending}
+                className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-medium text-sky-100 transition hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {exportMutation.isPending ? "Exporting…" : "Export CSV"}
+              </button>
+            </div>
+            <QueryIssues issues={clientIssues} />
+            {latestIssues.length > 0 && requestStatus !== "running" && requestStatus !== "validating" ? <QueryIssues issues={latestIssues} /> : null}
+            {lastValidation?.ok ? (
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+                Validation passed. The backend will execute the normalized read-only query with a limit of {formatNumber(lastValidation.appliedLimit ?? 0, 0)} rows.
               </div>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                {metadata.examples.map((example) => (
-                  <button
-                    key={example.id}
-                    onClick={() => {
-                      const nextState = applyExample(metadata, example.id);
-                      if (nextState) {
-                        setBuilderState(nextState);
-                        setIsCustomSql(false);
-                        setSql(buildBuilderSql(metadata, nextState));
-                      } else {
-                        setSql(example.sql);
-                        setIsCustomSql(true);
-                      }
-                    }}
-                    className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-left transition hover:bg-white/10"
-                  >
-                    <div className="text-sm font-medium text-white">{example.label}</div>
-                    <div className="mt-1 text-xs text-slate-400">{example.description}</div>
-                    <div className="mt-3 text-xs uppercase tracking-[0.18em] text-emerald-200">{example.relation}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </SectionCard>
-        </div>
+            ) : null}
+          </div>
+        </SectionCard>
       </div>
 
-      <SectionCard title="Results" subtitle="Validated query output appears here with row counts, timing, and the applied row cap.">
+      <SectionCard
+        title="Results"
+        subtitle="Validated query output appears here with row counts, timing, and the applied row cap."
+        actions={
+          <button
+            onClick={exportResults}
+            disabled={!canExport || exportMutation.isPending}
+            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {exportMutation.isPending ? "Exporting…" : "Export CSV"}
+          </button>
+        }
+      >
         <ResultsTable
           result={lastResult}
           status={requestStatus}

@@ -12,6 +12,7 @@ import type {
   MonthlyActivityCategoryPoint,
   OverviewResponse,
   QueryMetadataResponse,
+  QueryExportFormat,
   QueryRunResponse,
   SubjectCameraHeatmapPoint,
   TimeOfDayCompositionPoint,
@@ -119,6 +120,45 @@ const postQueryJson = async <T>(path: string, body: unknown): Promise<T> => {
   }
 };
 
+const postQueryDownload = async (path: string, body: unknown): Promise<Blob> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), QUERY_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const message =
+        payload && typeof payload === "object" && "issues" in payload && Array.isArray((payload as { issues?: Array<{ message?: string }> }).issues)
+          ? (payload as { issues: Array<{ message?: string }> }).issues[0]?.message ?? `The export request returned HTTP ${response.status}.`
+          : payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
+            ? (payload as { error: string }).error
+            : `The export request returned HTTP ${response.status}.`;
+      throw new QueryRequestError("INVALID_RESPONSE", message);
+    }
+
+    return await response.blob();
+  } catch (error) {
+    if (error instanceof QueryRequestError) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new QueryRequestError("TIMEOUT", "The export request took longer than 10 seconds and was stopped.");
+    }
+    throw new QueryRequestError("NETWORK", "The export service is unreachable right now. Please retry in a moment.");
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
 export const api = {
   filterOptions: () => fetchJson<FilterOptionsResponse>("/api/filters/options"),
   kpis: (filters: DashboardFilters) => fetchJson<KpiResponse>("/api/kpis", filters),
@@ -136,6 +176,7 @@ export const api = {
   queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
   validateQuery: (sql: string) => postQueryJson<QueryValidationResponse>("/api/query/validate", { sql }),
   runQuery: (sql: string) => postQueryJson<QueryRunResponse>("/api/query/run", { sql }),
+  exportQuery: (sql: string, format: QueryExportFormat = "csv") => postQueryDownload("/api/query/export", { sql, format }),
   exportUrl: (filters: EventQuery) => `${appEnv.apiBaseUrl}/api/events/export?${buildParams(filters)}`,
   exportsEnabled: appEnv.exportsEnabled
 };

@@ -648,6 +648,13 @@ export type QueryRunRequest = {
   sql: string;
 };
 
+export type QueryExportFormat = "csv";
+
+export type QueryExportRequest = {
+  sql: string;
+  format: QueryExportFormat;
+};
+
 export type QueryResultColumn = {
   name: string;
   label: string;
