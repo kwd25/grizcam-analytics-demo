@@ -33,6 +33,14 @@ export class QueryRequestError extends Error {
 
 const QUERY_REQUEST_TIMEOUT_MS = 10_000;
 
+const isStructuredQueryResponse = (payload: unknown): payload is { issues: unknown[] } => {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  return "issues" in payload && Array.isArray((payload as { issues?: unknown[] }).issues);
+};
+
 const buildParams = (filters: DashboardFilters | EventQuery) => {
   const params = new URLSearchParams();
 
@@ -82,13 +90,18 @@ const postQueryJson = async <T>(path: string, body: unknown): Promise<T> => {
     const payload = await response.json().catch(() => null);
 
     if (!response.ok) {
-      if (payload && typeof payload === "object") {
+      if (isStructuredQueryResponse(payload)) {
         return payload as T;
       }
-      throw new QueryRequestError("INVALID_RESPONSE", `The query service returned HTTP ${response.status}.`);
+
+      const message =
+        payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
+          ? (payload as { error: string }).error
+          : `The query service returned HTTP ${response.status}.`;
+      throw new QueryRequestError("INVALID_RESPONSE", message);
     }
 
-    if (!payload || typeof payload !== "object") {
+    if (!isStructuredQueryResponse(payload) && (!payload || typeof payload !== "object")) {
       throw new QueryRequestError("INVALID_RESPONSE", "The query service returned an invalid response.");
     }
 

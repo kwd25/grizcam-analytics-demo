@@ -222,8 +222,8 @@ const applyExample = (metadata: QueryMetadataResponse, id: string): QueryBuilder
   }
 };
 
-const QueryIssues = ({ issues, tone = "danger" }: { issues: QueryValidationIssue[]; tone?: "danger" | "muted" }) =>
-  issues.length > 0 ? (
+const QueryIssues = ({ issues, tone = "danger" }: { issues?: QueryValidationIssue[]; tone?: "danger" | "muted" }) =>
+  (issues?.length ?? 0) > 0 ? (
     <div
       className={classNames(
         "rounded-2xl border px-4 py-3 text-sm",
@@ -232,7 +232,7 @@ const QueryIssues = ({ issues, tone = "danger" }: { issues: QueryValidationIssue
     >
       <div className="font-medium">{tone === "danger" ? "Validation feedback" : "Workspace notes"}</div>
       <ul className="mt-2 space-y-1 text-sm">
-        {issues.map((issue, index) => (
+        {issues?.map((issue, index) => (
           <li key={`${issue.code}-${index}`}>{issue.message}</li>
         ))}
       </ul>
@@ -287,7 +287,7 @@ const ResultsTable = ({
   }
 
   if (!result.ok) {
-    return <QueryIssues issues={result.issues} />;
+    return <QueryIssues issues={result.issues ?? [{ code: "EXECUTION_ERROR", message: "The query failed without a structured error payload." }]} />;
   }
 
   if ((result.rowCount ?? 0) === 0) {
