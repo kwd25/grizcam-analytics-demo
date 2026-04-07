@@ -105,7 +105,7 @@ export const DashboardPage = () => {
   return (
     <AppShell
       title="GrizCam Overview"
-      subtitle="Classic wildlife and activity dashboard, focused on the familiar analytics views with a faster initial load."
+      subtitle="Classic wildlife and activity dashboard, focused on the familiar analytics views."
       badge={appEnv.demoLabel}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={onFilterChange} onReset={onReset} />}
     >
