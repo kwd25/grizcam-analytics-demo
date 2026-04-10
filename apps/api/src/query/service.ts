@@ -5,7 +5,7 @@ import type {
   QueryValidationResponse
 } from "@grizcam/shared";
 import type { FieldDef, PoolClient, QueryResult } from "pg";
-import { astVisitor, parse, toSql, type Expr, type SelectStatement, type Statement } from "pgsql-ast-parser";
+import { parse, toSql, type Expr, type SelectStatement, type Statement } from "pgsql-ast-parser";
 import { pool } from "../db.js";
 import { queryCatalog } from "./catalog.js";
 
@@ -13,6 +13,24 @@ type ValidationFacts = {
   issues: QueryValidationIssue[];
   activeRelations: Set<string>;
   relationLimits: number[];
+};
+
+type SelectProjection = {
+  index: number;
+  alias: string | null;
+  outputName: string;
+  expr: Expr;
+  referenceNames: string[];
+};
+
+type ValidationState = ValidationFacts & {
+  cteColumns: Map<string, Set<string>>;
+  allApprovedColumns: Set<string>;
+};
+
+type ExprValidationOptions = {
+  orderByAliases?: Map<string, SelectProjection>;
+  resolvingAliases?: Set<string>;
 };
 
 type ValidatedQuery = {
@@ -50,24 +68,47 @@ const inferSelectedColumnName = (expr: Expr, index: number) => {
   }
 };
 
-const collectColumnNames = (statement: SelectStatement): Set<string> => {
+const isReadOnlySelectStatement = (statement: Statement): statement is SelectStatement =>
+  statement.type === "select" || statement.type === "with" || statement.type === "union" || statement.type === "union all";
+
+const extractSelectProjections = (statement: SelectStatement): SelectProjection[] => {
   if (statement.type === "with" || statement.type === "with recursive") {
     const inner = statement.in;
-    if (inner.type === "select" || inner.type === "union" || inner.type === "union all") {
-      return collectColumnNames(inner);
+    if (isReadOnlySelectStatement(inner)) {
+      return extractSelectProjections(inner);
     }
-    return new Set();
+    return [];
   }
 
   if (statement.type === "union" || statement.type === "union all") {
-    return collectColumnNames(statement.left);
+    return extractSelectProjections(statement.left);
   }
 
   if (statement.type !== "select") {
-    return new Set();
+    return [];
   }
 
-  return new Set((statement.columns ?? []).map((column, index) => normalizeIdentifier(column.alias?.name ?? inferSelectedColumnName(column.expr, index))));
+  return (statement.columns ?? []).map((column, index) => {
+    const alias = column.alias?.name ? normalizeIdentifier(column.alias.name) : null;
+    const outputName = normalizeIdentifier(column.alias?.name ?? inferSelectedColumnName(column.expr, index));
+    const referenceNames = alias
+      ? [alias]
+      : column.expr.type === "ref"
+        ? []
+        : [outputName];
+
+    return {
+      index: index + 1,
+      alias,
+      outputName,
+      expr: column.expr,
+      referenceNames
+    };
+  });
+};
+
+const collectColumnNames = (statement: SelectStatement): Set<string> => {
+  return new Set(extractSelectProjections(statement).map((projection) => projection.outputName));
 };
 
 const hasComments = (sql: string) => /--|\/\*/.test(sql);
@@ -103,137 +144,335 @@ const getTopLevelLimitValue = (statement: SelectStatement): number | null => {
 const wrapWithLimit = (sql: string, limit: number) => `select * from (${sql}) as "__grizcam_limited" limit ${limit}`;
 
 const buildValidationFacts = (statement: SelectStatement): ValidationFacts => {
-  const issues: QueryValidationIssue[] = [];
-  const activeRelations = new Set<string>();
-  const relationLimits: number[] = [];
-  const cteColumns = new Map<string, Set<string>>();
-  const allApprovedColumns = new Set<string>();
+  const state: ValidationState = {
+    issues: [],
+    activeRelations: new Set<string>(),
+    relationLimits: [],
+    cteColumns: new Map<string, Set<string>>(),
+    allApprovedColumns: new Set<string>()
+  };
 
   queryCatalog.relations.forEach((relation) => {
-    relation.columns.forEach((column) => allApprovedColumns.add(column.name));
+    relation.columns.forEach((column) => state.allApprovedColumns.add(column.name));
   });
 
   const registerRelation = (relationName: string) => {
     const relation = getRelationByName(relationName);
     if (!relation) {
-      pushIssue(issues, "RELATION_NOT_ALLOWED", `Relation "${relationName}" is not approved for querying.`);
+      pushIssue(state.issues, "RELATION_NOT_ALLOWED", `Relation "${relationName}" is not approved for querying.`);
       return;
     }
-    activeRelations.add(relation.name);
-    relationLimits.push(relation.maxLimit);
+    state.activeRelations.add(relation.name);
+    state.relationLimits.push(relation.maxLimit);
   };
 
-  const visitor = astVisitor((visit) => ({
-    statement: (current) => {
-      if (current.type === "with recursive") {
-        pushIssue(issues, "INVALID_QUERY", "Recursive CTEs are not allowed in the query workspace.");
-        return;
-      }
-
-      if (current.type === "with") {
-        current.bind.forEach((binding) => {
-          if (
-            binding.statement.type !== "select" &&
-            binding.statement.type !== "union" &&
-            binding.statement.type !== "union all" &&
-            binding.statement.type !== "with"
-          ) {
-            pushIssue(issues, "NON_SELECT_NOT_ALLOWED", `CTE "${binding.alias.name}" must contain a read-only SELECT query.`);
-            return;
-          }
-          cteColumns.set(normalizeIdentifier(binding.alias.name), collectColumnNames(binding.statement as SelectStatement));
-          visit.super().statement(binding.statement as Statement);
-        });
-        visit.super().statement(current.in as Statement);
-        return;
-      }
-
-      if (current.type !== "select" && current.type !== "union" && current.type !== "union all") {
-        pushIssue(issues, "NON_SELECT_NOT_ALLOWED", "Only read-only SELECT statements are allowed in the query workspace.");
-        return;
-      }
-
-      visit.super().statement(current);
-    },
-    tableRef: (table) => {
-      if (table.schema && table.schema !== "public") {
-        pushIssue(issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${table.schema}" is blocked in the query workspace.`);
-        return;
-      }
-
-      const relationName = normalizeIdentifier(table.name);
-      if (relationName === "information_schema" || relationName === "pg_catalog") {
-        pushIssue(issues, "SYSTEM_SCHEMA_BLOCKED", `Relation "${relationName}" is blocked in the query workspace.`);
-        return;
-      }
-
-      if (cteColumns.has(relationName)) {
-        return;
-      }
-
-      registerRelation(relationName);
-    },
-    ref: (ref) => {
-      if (ref.name === "*") {
-        if (activeRelations.has("events") && !ref.table) {
-          pushIssue(issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
-        }
-        if (ref.table && normalizeIdentifier(ref.table.name) === "events") {
-          pushIssue(issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
-        }
-        return;
-      }
-
-      const columnName = normalizeIdentifier(String(ref.name));
-      if (ref.table?.schema && ref.table.schema !== "public") {
-        pushIssue(issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${ref.table.schema}" is blocked in the query workspace.`);
-        return;
-      }
-
-      if (ref.table) {
-        const tableName = normalizeIdentifier(ref.table.name);
-        if (cteColumns.has(tableName)) {
-          const columns = cteColumns.get(tableName)!;
-          if (columns.size > 0 && !columns.has(columnName)) {
-            pushIssue(issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not available on "${tableName}".`);
-          }
-          return;
-        }
-
-        const relation = getRelationByName(tableName);
-        if (relation) {
-          if (!relation.columns.some((column) => column.name === columnName)) {
-            pushIssue(issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not allowed on "${tableName}".`);
-          }
-          return;
-        }
-
-        // Alias-qualified refs are allowed as long as the underlying base relations pass whitelist validation.
-        return;
-      }
-
-      if (!allApprovedColumns.has(columnName) && ![...cteColumns.values()].some((columns) => columns.has(columnName))) {
-        pushIssue(issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not approved for this query.`);
-      }
-    },
-    call: (call) => {
-      const functionName = normalizeIdentifier(call.function.name);
-      if (!queryCatalog.allowedFunctions.has(functionName)) {
-        pushIssue(issues, "FUNCTION_NOT_ALLOWED", `Function "${functionName}" is not allowed in the query workspace.`);
-      }
-      if (call.over || call.withinGroup) {
-        pushIssue(issues, "FUNCTION_NOT_ALLOWED", `Window and within-group syntax is not allowed for "${functionName}".`);
-      }
-      visit.super().call(call);
+  const validateRef = (expr: Extract<Expr, { type: "ref" }>, options?: ExprValidationOptions) => {
+    if (expr.name === "*") {
+      return;
     }
-  }));
 
-  visitor.statement(statement as Statement);
+    const columnName = normalizeIdentifier(String(expr.name));
+
+    if (!expr.table && options?.orderByAliases?.has(columnName)) {
+      const seenAliases = options.resolvingAliases ?? new Set<string>();
+      if (seenAliases.has(columnName)) {
+        pushIssue(state.issues, "INVALID_QUERY", `ORDER BY alias "${columnName}" resolves recursively.`);
+        return;
+      }
+
+      const projection = options.orderByAliases.get(columnName)!;
+      seenAliases.add(columnName);
+      validateExpr(projection.expr, {
+        orderByAliases: options.orderByAliases,
+        resolvingAliases: seenAliases
+      });
+      seenAliases.delete(columnName);
+      return;
+    }
+
+    if (expr.table?.schema && expr.table.schema !== "public") {
+      pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${expr.table.schema}" is blocked in the query workspace.`);
+      return;
+    }
+
+    if (expr.table) {
+      const tableName = normalizeIdentifier(expr.table.name);
+      if (state.cteColumns.has(tableName)) {
+        const columns = state.cteColumns.get(tableName)!;
+        if (columns.size > 0 && !columns.has(columnName)) {
+          pushIssue(state.issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not available on "${tableName}".`);
+        }
+        return;
+      }
+
+      const relation = getRelationByName(tableName);
+      if (relation) {
+        if (!relation.columns.some((column) => column.name === columnName)) {
+          pushIssue(state.issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not allowed on "${tableName}".`);
+        }
+        return;
+      }
+
+      // Alias-qualified refs are allowed as long as the underlying base relations pass whitelist validation.
+      return;
+    }
+
+    if (!state.allApprovedColumns.has(columnName) && ![...state.cteColumns.values()].some((columns) => columns.has(columnName))) {
+      pushIssue(state.issues, "COLUMN_NOT_ALLOWED", `Column "${columnName}" is not approved for this query.`);
+    }
+  };
+
+  const validateOrderBy = (orderBy: NonNullable<Extract<SelectStatement, { type: "select" }>["orderBy"]>, projections: SelectProjection[]) => {
+    const projectionMap = new Map<string, SelectProjection>();
+    projections.forEach((projection) => {
+      projection.referenceNames.forEach((referenceName) => {
+        if (!projectionMap.has(referenceName)) {
+          projectionMap.set(referenceName, projection);
+        }
+      });
+    });
+
+    orderBy.forEach((entry) => {
+      const by = entry.by;
+      if (by.type === "integer" || by.type === "numeric") {
+        const position = Number(by.value);
+        if (!Number.isInteger(position) || position < 1 || position > projections.length) {
+          pushIssue(state.issues, "INVALID_QUERY", `ORDER BY position ${position} is not in select list.`);
+        }
+        return;
+      }
+
+      validateExpr(by, {
+        orderByAliases: projectionMap,
+        resolvingAliases: new Set<string>()
+      });
+    });
+  };
+
+  const validateFromItem = (fromItem: NonNullable<Extract<SelectStatement, { type: "select" }>["from"]>[number]) => {
+    if (fromItem.type === "table") {
+      const table = fromItem.name;
+      if (table.schema && table.schema !== "public") {
+        pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${table.schema}" is blocked in the query workspace.`);
+      } else {
+        const relationName = normalizeIdentifier(table.name);
+        if (relationName === "information_schema" || relationName === "pg_catalog") {
+          pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Relation "${relationName}" is blocked in the query workspace.`);
+        } else if (!state.cteColumns.has(relationName)) {
+          registerRelation(relationName);
+        }
+      }
+
+      if (fromItem.join?.on) {
+        validateExpr(fromItem.join.on);
+      }
+      return;
+    }
+
+    if (fromItem.type === "statement") {
+      validateStatement(fromItem.statement as Statement);
+      if (fromItem.join?.on) {
+        validateExpr(fromItem.join.on);
+      }
+      return;
+    }
+
+    validateExpr(fromItem);
+    if (fromItem.join?.on) {
+      validateExpr(fromItem.join.on);
+    }
+  };
+
+  const validateProjectionExpr = (projection: SelectProjection) => {
+    const expr = projection.expr;
+    if (expr.type === "ref" && expr.name === "*") {
+      if (state.activeRelations.has("events") && !expr.table) {
+        pushIssue(state.issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
+      }
+      if (expr.table && normalizeIdentifier(expr.table.name) === "events") {
+        pushIssue(state.issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
+      }
+      return;
+    }
+
+    validateExpr(expr);
+  };
+
+  function validateExpr(expr: Expr, options?: ExprValidationOptions): void {
+    switch (expr.type) {
+      case "ref":
+        validateRef(expr, options);
+        return;
+      case "call": {
+        if (expr.function.schema && expr.function.schema !== "public") {
+          pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${expr.function.schema}" is blocked in the query workspace.`);
+        }
+
+        const functionName = normalizeIdentifier(expr.function.name);
+        if (!queryCatalog.allowedFunctions.has(functionName)) {
+          pushIssue(state.issues, "FUNCTION_NOT_ALLOWED", `Function "${functionName}" is not allowed in the query workspace.`);
+        }
+        if (expr.over || expr.withinGroup) {
+          pushIssue(state.issues, "FUNCTION_NOT_ALLOWED", `Window and within-group syntax is not allowed for "${functionName}".`);
+        }
+
+        expr.args.forEach((arg) => validateExpr(arg));
+        expr.orderBy?.forEach((entry) => validateExpr(entry.by));
+        if (expr.filter) {
+          validateExpr(expr.filter);
+        }
+        return;
+      }
+      case "binary":
+        if (expr.opSchema && expr.opSchema !== "public") {
+          pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${expr.opSchema}" is blocked in the query workspace.`);
+        }
+        validateExpr(expr.left, options);
+        validateExpr(expr.right, options);
+        return;
+      case "unary":
+        if (expr.opSchema && expr.opSchema !== "public") {
+          pushIssue(state.issues, "SYSTEM_SCHEMA_BLOCKED", `Schema "${expr.opSchema}" is blocked in the query workspace.`);
+        }
+        validateExpr(expr.operand, options);
+        return;
+      case "cast":
+        validateExpr(expr.operand, options);
+        return;
+      case "ternary":
+        validateExpr(expr.value, options);
+        validateExpr(expr.lo, options);
+        validateExpr(expr.hi, options);
+        return;
+      case "member":
+        validateExpr(expr.operand, options);
+        return;
+      case "extract":
+        validateExpr(expr.from, options);
+        return;
+      case "list":
+      case "array":
+        expr.expressions.forEach((entry) => validateExpr(entry, options));
+        return;
+      case "array select":
+        validateStatement(expr.select as Statement);
+        return;
+      case "arrayIndex":
+        validateExpr(expr.array, options);
+        validateExpr(expr.index, options);
+        return;
+      case "overlay":
+        validateExpr(expr.value, options);
+        validateExpr(expr.placing, options);
+        validateExpr(expr.from, options);
+        if (expr.for) {
+          validateExpr(expr.for, options);
+        }
+        return;
+      case "substring":
+        validateExpr(expr.value, options);
+        if (expr.from) {
+          validateExpr(expr.from, options);
+        }
+        if (expr.for) {
+          validateExpr(expr.for, options);
+        }
+        return;
+      case "case":
+        if (expr.value) {
+          validateExpr(expr.value, options);
+        }
+        expr.whens.forEach((item) => {
+          validateExpr(item.when, options);
+          validateExpr(item.value, options);
+        });
+        if (expr.else) {
+          validateExpr(expr.else, options);
+        }
+        return;
+      case "select":
+      case "with":
+      case "union":
+      case "union all":
+      case "with recursive":
+        validateStatement(expr as Statement);
+        return;
+      case "parameter":
+      case "null":
+      case "integer":
+      case "default":
+      case "numeric":
+      case "string":
+      case "boolean":
+      case "constant":
+      case "keyword":
+        return;
+    }
+  }
+
+  function validateStatement(current: Statement): void {
+    if (current.type === "with recursive") {
+      pushIssue(state.issues, "INVALID_QUERY", "Recursive CTEs are not allowed in the query workspace.");
+      return;
+    }
+
+    if (current.type === "with") {
+      current.bind.forEach((binding) => {
+        if (!isReadOnlySelectStatement(binding.statement as Statement)) {
+          pushIssue(state.issues, "NON_SELECT_NOT_ALLOWED", `CTE "${binding.alias.name}" must contain a read-only SELECT query.`);
+          return;
+        }
+
+        state.cteColumns.set(normalizeIdentifier(binding.alias.name), collectColumnNames(binding.statement as SelectStatement));
+        validateStatement(binding.statement as Statement);
+      });
+
+      validateStatement(current.in as Statement);
+      return;
+    }
+
+    if (current.type === "union" || current.type === "union all") {
+      validateStatement(current.left as Statement);
+      validateStatement(current.right as Statement);
+      return;
+    }
+
+    if (current.type !== "select") {
+      pushIssue(state.issues, "NON_SELECT_NOT_ALLOWED", "Only read-only SELECT statements are allowed in the query workspace.");
+      return;
+    }
+
+    const projections = extractSelectProjections(current);
+
+    current.from?.forEach((fromItem) => validateFromItem(fromItem));
+    projections.forEach(validateProjectionExpr);
+    if (current.where) {
+      validateExpr(current.where);
+    }
+    current.groupBy?.forEach((expr) => validateExpr(expr));
+    if (current.having) {
+      validateExpr(current.having);
+    }
+    if (Array.isArray(current.distinct)) {
+      current.distinct.forEach((expr) => validateExpr(expr));
+    }
+    if (current.limit?.limit) {
+      validateExpr(current.limit.limit);
+    }
+    if (current.limit?.offset) {
+      validateExpr(current.limit.offset);
+    }
+    if (current.orderBy) {
+      validateOrderBy(current.orderBy, projections);
+    }
+  }
+
+  validateStatement(statement as Statement);
 
   return {
-    issues,
-    activeRelations,
-    relationLimits
+    issues: state.issues,
+    activeRelations: state.activeRelations,
+    relationLimits: state.relationLimits
   };
 };
 
