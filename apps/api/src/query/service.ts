@@ -285,16 +285,6 @@ const buildValidationFacts = (statement: SelectStatement): ValidationFacts => {
 
   const validateProjectionExpr = (projection: SelectProjection) => {
     const expr = projection.expr;
-    if (expr.type === "ref" && expr.name === "*") {
-      if (state.activeRelations.has("events") && !expr.table) {
-        pushIssue(state.issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
-      }
-      if (expr.table && normalizeIdentifier(expr.table.name) === "events") {
-        pushIssue(state.issues, "SELECT_ALL_NOT_ALLOWED", 'SELECT * is not allowed for "events". Choose explicit columns instead.');
-      }
-      return;
-    }
-
     validateExpr(expr);
   };
 
