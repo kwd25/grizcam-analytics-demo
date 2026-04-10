@@ -451,8 +451,7 @@ Blocked:
 - Window functions and within-group syntax
 
 Special restriction:
-- `SELECT *` is not allowed for `events`
-- Explicit column selection is required for `events`
+- `SELECT *` is allowed, including on `events`, but agents should still prefer explicit columns when they only need a narrower result.
 
 Remaining restrictions:
 - Alias resolution is local to the same `SELECT` scope.

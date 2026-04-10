@@ -134,7 +134,7 @@ test("rejects blocked schema reference inside ORDER BY subquery", () => {
   assert.ok(result.issues.some((issue) => issue.code === "SYSTEM_SCHEMA_BLOCKED"));
 });
 
-test("still rejects select star from events", () => {
+test("accepts select star from events", () => {
   const sql = `
     select *
     from events
@@ -143,8 +143,8 @@ test("still rejects select star from events", () => {
   `;
 
   const result = validateQuerySql(sql);
-  assert.equal(result.ok, false);
-  assert.ok(result.issues.some((issue) => issue.code === "SELECT_ALL_NOT_ALLOWED"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.issues, []);
 });
 
 test("still rejects window functions", () => {
