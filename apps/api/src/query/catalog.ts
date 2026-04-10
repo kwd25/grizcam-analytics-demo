@@ -278,6 +278,6 @@ export const getQueryMetadata = (): QueryMetadataResponse => ({
   examples: queryCatalog.examples,
   helpText: {
     title: "Read-only query workspace",
-    body: "Only approved analytics relations are available. The backend blocks writes, comments, multi-statement SQL, unsafe relations, and oversized result sets."
+    body: "Only approved analytics relations are available. The backend blocks writes, comments, multi-statement SQL, unsafe relations, blocked schemas/functions, and oversized result sets. Safe derived SELECT aliases may be used in ORDER BY."
   }
 });
