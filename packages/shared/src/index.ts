@@ -658,6 +658,41 @@ export type GenerateSqlResponse = {
   warning?: string;
 };
 
+export type QueryChatHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type QueryLatestResultSummary = {
+  rowCount?: number;
+  durationMs?: number;
+  appliedLimit?: number;
+  columns?: string[];
+};
+
+export type QueryLatestContext = {
+  sql?: string;
+  validation?: {
+    ok: boolean;
+    appliedLimit?: number;
+    issues: string[];
+  };
+  result?: QueryLatestResultSummary;
+};
+
+export type QueryFollowUpRequest = {
+  prompt: string;
+  history: QueryChatHistoryMessage[];
+  latestQuery?: QueryLatestContext;
+};
+
+export type QueryFollowUpResponse = {
+  answer: string;
+  suggestedSql?: string;
+  warning?: string;
+  model?: string;
+};
+
 export type QueryExportFormat = "csv";
 
 export type QueryExportRequest = {

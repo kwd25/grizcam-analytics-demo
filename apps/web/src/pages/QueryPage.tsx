@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   QueryBuilderFilter,
   QueryBuilderState,
+  QueryChatHistoryMessage,
+  QueryFollowUpResponse,
+  QueryLatestContext,
   QueryMetadataResponse,
   QueryOperator,
   QueryRelationMetadata,
@@ -17,13 +20,54 @@ import { appEnv } from "../lib/env";
 import { classNames, formatNumber } from "../lib/utils";
 
 const DISALLOWED_SQL = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|comment)\b/i;
+
 type RequestStatus = "idle" | "validating" | "running" | "success" | "error" | "timeout";
-type AiStatus = "idle" | "generating" | "generated" | "error";
+type ViewMode = "chat" | "manual";
+type ComposerAction = "create-query" | "follow-up";
+
+type CreateQueryChatMessage = {
+  id: string;
+  kind: "create-query";
+  sql: string;
+  validation: QueryValidationResponse;
+  result: QueryRunResponse | null;
+};
+
+type FollowUpChatMessage = {
+  id: string;
+  kind: "follow-up";
+  answer: string;
+  suggestedSql?: string;
+  warning?: string;
+};
+
+type NoticeChatMessage = {
+  id: string;
+  kind: "notice";
+  title: string;
+  detail: string;
+  tone: "danger" | "muted";
+};
+
+type UserChatMessage = {
+  id: string;
+  kind: "user";
+  action: ComposerAction;
+  text: string;
+};
+
+type ChatMessage = UserChatMessage | CreateQueryChatMessage | FollowUpChatMessage | NoticeChatMessage;
+
+const AI_EXAMPLE_PROMPTS = [
+  "what are the emptiest times of year",
+  "top 10 busiest cameras in last 30 days",
+  "show recent vehicle events"
+];
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
 const formatOperatorLabel = (value: string) => value.replace(/_/g, " ");
-
 const makeFilterId = () => `filter-${Math.random().toString(36).slice(2, 10)}`;
+const makeChatId = () => `msg-${Math.random().toString(36).slice(2, 10)}`;
 
 const buildInitialState = (metadata: QueryMetadataResponse): QueryBuilderState => {
   const relation = metadata.relations.find((item) => item.category === "preferred") ?? metadata.relations[0];
@@ -160,11 +204,26 @@ const formatCellValue = (value: unknown) => {
   return String(value);
 };
 
-const AI_EXAMPLE_PROMPTS = [
-  "what are the emptiest times of year",
-  "top 10 busiest cameras in last 30 days",
-  "show recent vehicle events"
-];
+const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
+  if (!error) {
+    return [];
+  }
+
+  if (error instanceof QueryRequestError) {
+    return [
+      {
+        code: error.code === "TIMEOUT" ? "QUERY_TIMEOUT" : "EXECUTION_ERROR",
+        message: error.message
+      }
+    ];
+  }
+
+  if (error instanceof Error) {
+    return [{ code: "EXECUTION_ERROR", message: error.message }];
+  }
+
+  return [{ code: "EXECUTION_ERROR", message: "The query failed unexpectedly. Please retry." }];
+};
 
 const applyExample = (metadata: QueryMetadataResponse, id: string): QueryBuilderState | null => {
   const relation = metadata.relations.find((item) => item.name === "daily_camera_summary") ?? metadata.relations[0];
@@ -246,13 +305,7 @@ const QueryIssues = ({ issues, tone = "danger" }: { issues?: QueryValidationIssu
     </div>
   ) : null;
 
-const SelectionPills = ({
-  values,
-  emptyLabel
-}: {
-  values: string[];
-  emptyLabel: string;
-}) => (
+const SelectionPills = ({ values, emptyLabel }: { values: string[]; emptyLabel: string }) => (
   <div className="flex flex-wrap gap-2">
     {values.length > 0 ? (
       values.map((value) => (
@@ -363,137 +416,6 @@ const CompactBuilderSection = ({
   </details>
 );
 
-const CompactExampleRail = ({
-  examples,
-  onSelect
-}: {
-  examples: QueryMetadataResponse["examples"];
-  onSelect: (id: string, sql: string) => void;
-}) => (
-  <aside className="panel rounded-[28px] p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-auto">
-    <div className="mb-4">
-      <h2 className="text-xl font-semibold text-white">Examples</h2>
-      <p className="mt-1 text-sm text-slate-400">Start with a sample query, then adjust the filters, columns, or SQL to fit your question.</p>
-    </div>
-    <div className="space-y-2">
-      {examples.map((example) => (
-        <button
-          key={example.id}
-          onClick={() => onSelect(example.id, example.sql)}
-          className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:bg-white/10"
-        >
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-white">{example.label}</div>
-            <div className="mt-1 line-clamp-2 text-xs text-slate-400">{example.description}</div>
-          </div>
-        </button>
-      ))}
-    </div>
-  </aside>
-);
-
-const AiCommandBar = ({
-  prompt,
-  onPromptChange,
-  onSubmit,
-  onExample,
-  onRetry,
-  disabled,
-  status,
-  error,
-  canRetry
-}: {
-  prompt: string;
-  onPromptChange: (value: string) => void;
-  onSubmit: () => void;
-  onExample: (value: string) => void;
-  onRetry: () => void;
-  disabled: boolean;
-  status: AiStatus;
-  error: string | null;
-  canRetry: boolean;
-}) => (
-  <div className="space-y-3 rounded-[28px] border border-emerald-400/20 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(15,23,42,0.92))] p-4 shadow-[0_0_40px_rgba(16,185,129,0.08)]">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-200/80">AI Query Assist</div>
-        <div className="mt-1 text-sm text-slate-300">Ask for a query in plain English. Generated SQL stays editable before or after validation.</div>
-      </div>
-      <div className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1 text-[11px] text-slate-300">Single turn</div>
-    </div>
-    <div className="flex flex-col gap-3 md:flex-row">
-      <input
-        value={prompt}
-        onChange={(event) => onPromptChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSubmit();
-          }
-        }}
-        placeholder="Ask for a query in plain English"
-        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 font-mono text-sm text-slate-100 outline-none transition focus:border-emerald-400"
-      />
-      <div className="flex gap-2">
-        <button
-          onClick={onSubmit}
-          disabled={disabled || prompt.trim().length === 0}
-          className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {status === "generating" ? "Generating…" : "Generate SQL"}
-        </button>
-        {canRetry ? (
-          <button
-            onClick={onRetry}
-            disabled={disabled}
-            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Retry
-          </button>
-        ) : null}
-      </div>
-    </div>
-    <div className="flex flex-wrap gap-2">
-      {AI_EXAMPLE_PROMPTS.map((example) => (
-        <button
-          key={example}
-          onClick={() => onExample(example)}
-          disabled={disabled}
-          className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {example}
-        </button>
-      ))}
-    </div>
-    <div className="min-h-[20px] text-xs text-slate-300">
-      {error ? <span className="text-rose-200">{error}</span> : null}
-      {!error && status === "generated" ? <span className="text-emerald-100">SQL generated. The app will validate it before running.</span> : null}
-      {!error && status === "generating" ? <span className="text-emerald-100">Generating SQL from your prompt…</span> : null}
-    </div>
-  </div>
-);
-
-const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
-  if (!error) {
-    return [];
-  }
-
-  if (error instanceof QueryRequestError) {
-    return [
-      {
-        code: error.code === "TIMEOUT" ? "QUERY_TIMEOUT" : "EXECUTION_ERROR",
-        message: error.message
-      }
-    ];
-  }
-
-  if (error instanceof Error) {
-    return [{ code: "EXECUTION_ERROR", message: error.message }];
-  }
-
-  return [{ code: "EXECUTION_ERROR", message: "The query failed unexpectedly. Please retry." }];
-};
-
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -586,6 +508,936 @@ const ResultsTable = ({
   );
 };
 
+const CodePanel = ({ title, code }: { title: string; code: string }) => (
+  <div className="space-y-2">
+    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{title}</div>
+    <pre className="overflow-auto rounded-2xl border border-white/10 bg-slate-950/75 p-4 text-xs leading-6 text-slate-100">
+      <code>{code}</code>
+    </pre>
+  </div>
+);
+
+const summarizeLatestQuery = (sql: string, validation: QueryValidationResponse | null, result: QueryRunResponse | null): QueryLatestContext | undefined => {
+  if (!sql.trim() && !validation && !result) {
+    return undefined;
+  }
+
+  return {
+    sql: sql.trim() || undefined,
+    validation: validation
+      ? {
+          ok: validation.ok,
+          appliedLimit: validation.appliedLimit,
+          issues: validation.issues.map((issue) => issue.message)
+        }
+      : undefined,
+    result: result
+      ? {
+          rowCount: result.rowCount,
+          durationMs: result.durationMs,
+          appliedLimit: result.appliedLimit,
+          columns: result.columns?.map((column) => column.name)
+        }
+      : undefined
+  };
+};
+
+const buildFollowUpHistory = (messages: ChatMessage[]): QueryChatHistoryMessage[] =>
+  messages
+    .filter((message) => message.kind !== "notice")
+    .slice(-10)
+    .map((message) => {
+      if (message.kind === "user") {
+        return {
+          role: "user",
+          content: `[${message.action}] ${message.text}`
+        };
+      }
+
+      if (message.kind === "create-query") {
+        const outcome = message.result?.ok ? `Query ran and returned ${message.result.rowCount ?? 0} rows.` : "Query did not complete successfully.";
+        return {
+          role: "assistant",
+          content: `Generated SQL:\n${message.sql}\nValidation: ${message.validation.ok ? "passed" : "failed"}.\n${outcome}`
+        };
+      }
+
+      return {
+        role: "assistant",
+        content: `${message.answer}${message.suggestedSql ? `\nSuggested SQL:\n${message.suggestedSql}` : ""}`
+      };
+    });
+
+const ModeSidebar = ({
+  viewMode,
+  onSelectMode,
+  onPromptExample,
+  latestQuery
+}: {
+  viewMode: ViewMode;
+  onSelectMode: (mode: ViewMode) => void;
+  onPromptExample: (prompt: string) => void;
+  latestQuery: QueryLatestContext | undefined;
+}) => (
+  <aside className="panel rounded-[28px] p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-auto">
+    <div className="mb-4">
+      <h2 className="text-xl font-semibold text-white">Query Workspace</h2>
+      <p className="mt-1 text-sm text-slate-400">Chat is the primary experience. Switch to Manual when you want the full builder and raw editor controls.</p>
+    </div>
+    <div className="space-y-2">
+      {(["chat", "manual"] as ViewMode[]).map((mode) => (
+        <button
+          key={mode}
+          onClick={() => onSelectMode(mode)}
+          className={classNames(
+            "w-full rounded-2xl border px-4 py-3 text-left transition",
+            viewMode === mode
+              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+              : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+          )}
+        >
+          <div className="text-sm font-medium">{mode === "chat" ? "Chat" : "Manual"}</div>
+          <div className="mt-1 text-xs text-current/80">
+            {mode === "chat" ? "Ask for queries and follow up on results." : "Use the full builder, SQL editor, and export flow."}
+          </div>
+        </button>
+      ))}
+    </div>
+
+    <div className="mt-6">
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Example prompts</div>
+      <div className="mt-3 space-y-2">
+        {AI_EXAMPLE_PROMPTS.map((prompt) => (
+          <button
+            key={prompt}
+            onClick={() => onPromptExample(prompt)}
+            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left text-sm text-slate-200 transition hover:bg-white/10"
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+
+    <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest query context</div>
+      {latestQuery?.sql ? (
+        <div className="mt-3 space-y-2 text-sm text-slate-300">
+          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200">
+            Validation: {latestQuery.validation?.ok ? "passed" : "not yet valid"}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
+            {latestQuery.result?.rowCount !== undefined
+              ? `${formatNumber(latestQuery.result.rowCount, 0)} rows • ${formatNumber(latestQuery.result.durationMs ?? 0, 0)} ms`
+              : "No executed result yet"}
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">No query has been generated yet.</p>
+      )}
+    </div>
+  </aside>
+);
+
+const ChatTranscript = ({
+  messages,
+  isBusy,
+  requestStatus,
+  onUseSuggestedSql
+}: {
+  messages: ChatMessage[];
+  isBusy: boolean;
+  requestStatus: RequestStatus;
+  onUseSuggestedSql: (sql: string) => void;
+}) => (
+  <div className="space-y-4">
+    {messages.length === 0 ? (
+      <div className="rounded-3xl border border-dashed border-white/10 px-6 py-12 text-center">
+        <div className="text-lg font-medium text-white">Ask for a query or follow up on the data</div>
+        <p className="mt-2 text-sm text-slate-400">Use Create query to generate and run SQL. Use Follow up to ask about the data, schema, or how to refine the last query.</p>
+      </div>
+    ) : null}
+    {messages.map((message) => {
+      if (message.kind === "user") {
+        return (
+          <div key={message.id} className="flex justify-end">
+            <div className="max-w-[85%] rounded-[28px] border border-emerald-400/20 bg-emerald-400/10 px-4 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200/80">
+                {message.action === "create-query" ? "Create query" : "Follow up"}
+              </div>
+              <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-emerald-50">{message.text}</div>
+            </div>
+          </div>
+        );
+      }
+
+      if (message.kind === "notice") {
+        return (
+          <div key={message.id} className="flex justify-start">
+            <div className="max-w-[85%] rounded-[28px] border border-white/10 bg-white/5 px-4 py-3">
+              <div className="text-sm font-medium text-white">{message.title}</div>
+              <div className="mt-2 text-sm leading-6 text-slate-300">{message.detail}</div>
+              <div className="mt-3">
+                <QueryIssues issues={[{ code: "EXECUTION_ERROR", message: message.detail }]} tone={message.tone} />
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      if (message.kind === "follow-up") {
+        return (
+          <div key={message.id} className="flex justify-start">
+            <div className="max-w-[92%] rounded-[28px] border border-white/10 bg-white/5 px-4 py-4">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Follow up</div>
+              <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{message.answer}</div>
+              {message.warning ? (
+                <div className="mt-3">
+                  <QueryIssues issues={[{ code: "INVALID_QUERY", message: message.warning }]} tone="muted" />
+                </div>
+              ) : null}
+              {message.suggestedSql ? (
+                <div className="mt-4 space-y-3">
+                  <CodePanel title="Suggested SQL draft" code={message.suggestedSql} />
+                  <button
+                    onClick={() => onUseSuggestedSql(message.suggestedSql!)}
+                    className="rounded-xl border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs text-sky-100 transition hover:bg-sky-400/20"
+                  >
+                    Use in editor
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div key={message.id} className="flex justify-start">
+          <div className="max-w-[95%] space-y-4 rounded-[28px] border border-white/10 bg-white/5 px-4 py-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-100">
+                {message.validation.ok ? "Validation passed" : "Validation failed"}
+              </span>
+              {message.result?.ok ? (
+                <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-[11px] text-sky-100">
+                  Query ran
+                </span>
+              ) : null}
+              {message.result?.ok ? (
+                <span className="text-xs text-slate-400">
+                  {formatNumber(message.result.rowCount ?? 0, 0)} rows • {formatNumber(message.result.durationMs ?? 0, 0)} ms
+                </span>
+              ) : null}
+            </div>
+            <CodePanel title="Generated SQL" code={message.sql} />
+            {!message.validation.ok ? <QueryIssues issues={message.validation.issues} /> : null}
+            {message.validation.ok ? (
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+                Validation passed. The normalized query is ready in Manual mode if you want to tweak it.
+              </div>
+            ) : null}
+            {message.result ? (
+              <div className="space-y-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Query output</div>
+                <ResultsTable result={message.result} status={requestStatus === "running" && isBusy ? "running" : "success"} />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      );
+    })}
+  </div>
+);
+
+const ChatWorkspace = ({
+  messages,
+  composerText,
+  composerAction,
+  onComposerTextChange,
+  onComposerActionChange,
+  onSubmit,
+  onUseSuggestedSql,
+  isBusy,
+  error,
+  requestStatus
+}: {
+  messages: ChatMessage[];
+  composerText: string;
+  composerAction: ComposerAction;
+  onComposerTextChange: (value: string) => void;
+  onComposerActionChange: (action: ComposerAction) => void;
+  onSubmit: () => void;
+  onUseSuggestedSql: (sql: string) => void;
+  isBusy: boolean;
+  error: string | null;
+  requestStatus: RequestStatus;
+}) => (
+  <>
+    <SectionCard
+      title="Query Chat"
+      subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
+      className="min-h-[78vh]"
+    >
+      <div className="flex min-h-[68vh] flex-col">
+        <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+          Read-only workspace. Create query will generate, validate, and optionally run SQL. Follow up is advisory and may suggest SQL without executing it.
+        </div>
+        <div className="mt-4 flex-1 overflow-y-auto pr-1">
+          <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
+        </div>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <div className="rounded-[28px] border border-white/10 bg-slate-950/50 p-4">
+            <textarea
+              value={composerText}
+              onChange={(event) => onComposerTextChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  onSubmit();
+                }
+              }}
+              placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or how to refine it"}
+              spellCheck={false}
+              className="min-h-[90px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
+            />
+            <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-wrap gap-2">
+                {(["create-query", "follow-up"] as ComposerAction[]).map((action) => (
+                  <button
+                    key={action}
+                    onClick={() => onComposerActionChange(action)}
+                    className={classNames(
+                      "rounded-full border px-3 py-2 text-xs font-medium transition",
+                      composerAction === action
+                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                        : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                    )}
+                  >
+                    {action === "create-query" ? "Create query" : "Follow up"}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={onSubmit}
+                disabled={isBusy || composerText.trim().length === 0}
+                className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isBusy ? (composerAction === "create-query" ? "Working…" : "Thinking…") : composerAction === "create-query" ? "Send create query" : "Send follow up"}
+              </button>
+            </div>
+            {error ? <div className="mt-3 text-sm text-rose-200">{error}</div> : null}
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+  </>
+);
+
+type ManualWorkspaceProps = {
+  metadataQueryError: boolean;
+  metadataIssues: QueryValidationIssue[];
+  metadata?: QueryMetadataResponse;
+  builderState: QueryBuilderState | null;
+  relation?: QueryRelationMetadata;
+  aggregateSummary: string;
+  filterSummary: string;
+  sortSummary: string;
+  sortOptions: string[];
+  setRelation: (relationName: string) => void;
+  setBuilderState: Dispatch<SetStateAction<QueryBuilderState | null>>;
+  updateFilter: (id: string, patch: Partial<QueryBuilderFilter>) => void;
+  loadExample: (id: string, fallbackSql: string) => void;
+  sql: string;
+  generatedSql: string;
+  setSql: (value: string) => void;
+  isCustomSql: boolean;
+  setIsCustomSql: (value: boolean) => void;
+  lastGeneratedByAi: boolean;
+  setLastGeneratedByAi: (value: boolean) => void;
+  requestStatus: RequestStatus;
+  runValidation: (nextSql?: string) => Promise<QueryValidationResponse>;
+  runQuery: (nextSql?: string) => Promise<QueryRunResponse>;
+  exportResults: () => Promise<void>;
+  clientIssues: QueryValidationIssue[];
+  latestIssues: QueryValidationIssue[];
+  lastValidation: QueryValidationResponse | null;
+  lastResult: QueryRunResponse | null;
+  canRun: boolean;
+  canExport: boolean;
+  exportPending: boolean;
+};
+
+const ManualWorkspace = ({
+  metadataQueryError,
+  metadataIssues,
+  metadata,
+  builderState,
+  relation,
+  aggregateSummary,
+  filterSummary,
+  sortSummary,
+  sortOptions,
+  setRelation,
+  setBuilderState,
+  updateFilter,
+  loadExample,
+  sql,
+  generatedSql,
+  setSql,
+  isCustomSql,
+  setIsCustomSql,
+  lastGeneratedByAi,
+  setLastGeneratedByAi,
+  requestStatus,
+  runValidation,
+  runQuery,
+  exportResults,
+  clientIssues,
+  latestIssues,
+  lastValidation,
+  lastResult,
+  canRun,
+  canExport,
+  exportPending
+}: ManualWorkspaceProps) => (
+  <>
+    <SectionCard
+      title="Manual Workspace"
+      subtitle="Builder controls, direct SQL editing, and export remain available here."
+      actions={<span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-100">SELECT only</span>}
+    >
+      <p className="max-w-4xl text-sm leading-6 text-slate-300">
+        The backend still validates every query before execution. Generated SQL from Chat mode lands here automatically so you can inspect and tweak it.
+      </p>
+      {metadataQueryError ? (
+        <div className="mt-4">
+          <QueryIssues issues={metadataIssues} />
+        </div>
+      ) : null}
+    </SectionCard>
+
+    {metadata ? (
+      <SectionCard title="Examples" subtitle="Load a known-safe sample into the builder or editor.">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {metadata.examples.map((example) => (
+            <button
+              key={example.id}
+              onClick={() => loadExample(example.id, example.sql)}
+              className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left transition hover:bg-white/10"
+            >
+              <div className="text-sm font-medium text-white">{example.label}</div>
+              <div className="mt-1 text-xs text-slate-400">{example.description}</div>
+            </button>
+          ))}
+        </div>
+      </SectionCard>
+    ) : null}
+
+    <div className="grid gap-4">
+      <SectionCard
+        title="Query Builder"
+        subtitle="Choose a dataset, pick the fields you want, and narrow the results with filters, grouping, and sorting."
+      >
+        {metadataQueryError ? (
+          <QueryIssues issues={metadataIssues} />
+        ) : !metadata || !builderState || !relation ? (
+          <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-400">
+            Loading the approved query catalog…
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_140px]">
+              <label className="space-y-2 text-sm text-slate-300">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Relation</span>
+                <select
+                  value={builderState.relation}
+                  onChange={(event) => setRelation(event.target.value)}
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                >
+                  {metadata.relations.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-2 text-sm text-slate-300">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Limit</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={relation.maxLimit}
+                  value={builderState.limit}
+                  onChange={(event) =>
+                    setBuilderState((current) =>
+                      current
+                        ? {
+                            ...current,
+                            limit: Math.max(1, Math.min(Number(event.target.value) || relation.defaultLimit, relation.maxLimit))
+                          }
+                        : current
+                    )
+                  }
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-2">
+              <MultiSelectDropdown
+                title="Selectable columns"
+                subtitle={relation.description}
+                values={builderState.columns}
+                options={relation.columns.map((column) => ({ name: column.name, label: column.label }))}
+                onToggle={(name) =>
+                  setBuilderState((current) =>
+                    current
+                      ? {
+                          ...current,
+                          columns: current.columns.includes(name)
+                            ? current.columns.filter((value) => value !== name)
+                            : [...current.columns, name]
+                        }
+                      : current
+                  )
+                }
+                onReset={() =>
+                  setBuilderState((current) =>
+                    current
+                      ? {
+                          ...current,
+                          columns: relation.defaultColumns,
+                          groupBy: current.groupBy.filter((column) => relation.defaultColumns.includes(column))
+                        }
+                      : current
+                  )
+                }
+                emptyLabel="No columns selected yet."
+              />
+
+              <MultiSelectDropdown
+                title="Group by"
+                subtitle="Choose dimensions for aggregate breakouts."
+                values={builderState.groupBy}
+                options={relation.columns.filter((column) => column.groupable).map((column) => ({ name: column.name, label: column.label }))}
+                onToggle={(name) =>
+                  setBuilderState((current) =>
+                    current
+                      ? {
+                          ...current,
+                          groupBy: current.groupBy.includes(name)
+                            ? current.groupBy.filter((value) => value !== name)
+                            : [...current.groupBy, name]
+                        }
+                      : current
+                  )
+                }
+                onReset={() =>
+                  setBuilderState((current) =>
+                    current
+                      ? {
+                          ...current,
+                          groupBy: []
+                        }
+                      : current
+                  )
+                }
+                emptyLabel="No grouping applied."
+              />
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-3">
+              <CompactBuilderSection title="Aggregates" subtitle="Optional rollups for metric summaries." summary={aggregateSummary}>
+                <div className="space-y-2">
+                  {builderState.aggregates.map((aggregate, index) => (
+                    <div key={`${aggregate.column}-${index}`} className="grid gap-2 lg:grid-cols-[110px_minmax(0,1fr)_auto]">
+                      <select
+                        value={aggregate.func}
+                        onChange={(event) =>
+                          setBuilderState((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  aggregates: current.aggregates.map((item, itemIndex) =>
+                                    itemIndex === index ? { ...item, func: event.target.value as typeof item.func } : item
+                                  )
+                                }
+                              : current
+                          )
+                        }
+                        className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                      >
+                        {metadata.allowedAggregates.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={aggregate.column}
+                        onChange={(event) =>
+                          setBuilderState((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  aggregates: current.aggregates.map((item, itemIndex) =>
+                                    itemIndex === index ? { ...item, column: event.target.value } : item
+                                  )
+                                }
+                              : current
+                          )
+                        }
+                        className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                      >
+                        {relation.columns
+                          .filter((column) => column.aggregates.length > 0)
+                          .map((column) => (
+                            <option key={column.name} value={column.name}>
+                              {column.label}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        onClick={() =>
+                          setBuilderState((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  aggregates: current.aggregates.filter((_, itemIndex) => itemIndex !== index)
+                                }
+                              : current
+                          )
+                        }
+                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                      >
+                        X
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() =>
+                      setBuilderState((current) =>
+                        current
+                          ? {
+                              ...current,
+                              aggregates: [
+                                ...current.aggregates,
+                                {
+                                  column: relation.columns.find((column) => column.aggregates.length > 0)?.name ?? relation.columns[0].name,
+                                  func: "COUNT",
+                                  alias: ""
+                                }
+                              ]
+                            }
+                          : current
+                      )
+                    }
+                    className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200 transition hover:bg-white/10"
+                  >
+                    Add aggregate
+                  </button>
+                </div>
+              </CompactBuilderSection>
+
+              <CompactBuilderSection title="Filters" subtitle="Safe row-level conditions." summary={filterSummary} defaultOpen={builderState.filters.length > 0}>
+                <div className="mb-2 flex items-center justify-end">
+                  <button
+                    onClick={() =>
+                      setBuilderState((current) =>
+                        current
+                          ? {
+                              ...current,
+                              filters: [
+                                ...current.filters,
+                                {
+                                  id: makeFilterId(),
+                                  column: relation.columns[0].name,
+                                  operator: relation.columns[0].filterOperators[0]
+                                }
+                              ]
+                            }
+                          : current
+                      )
+                    }
+                    className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                  >
+                    Add filter
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {builderState.filters.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No filters yet.</div>
+                  ) : (
+                    builderState.filters.map((filter) => {
+                      const column = relation.columns.find((item) => item.name === filter.column) ?? relation.columns[0];
+                      return (
+                        <div key={filter.id} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5">
+                          <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_130px_auto]">
+                            <select
+                              value={filter.column}
+                              onChange={(event) => {
+                                const nextColumn = relation.columns.find((item) => item.name === event.target.value) ?? relation.columns[0];
+                                updateFilter(filter.id, { column: nextColumn.name, operator: nextColumn.filterOperators[0], value: "", secondValue: "" });
+                              }}
+                              className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                            >
+                              {relation.columns.map((item) => (
+                                <option key={item.name} value={item.name}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={filter.operator}
+                              onChange={(event) => updateFilter(filter.id, { operator: event.target.value as QueryOperator })}
+                              className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                            >
+                              {column.filterOperators.map((operator) => (
+                                <option key={operator} value={operator}>
+                                  {formatOperatorLabel(operator)}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() =>
+                                setBuilderState((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        filters: current.filters.filter((item) => item.id !== filter.id)
+                                      }
+                                    : current
+                                )
+                              }
+                              className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                            >
+                              X
+                            </button>
+                          </div>
+                          <div className={classNames("grid gap-2", filter.operator === "BETWEEN" ? "md:grid-cols-2" : "grid-cols-1")}>
+                            {filter.operator !== "IS NULL" && filter.operator !== "IS NOT NULL" ? (
+                              <>
+                                <input
+                                  value={filter.value ?? ""}
+                                  onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
+                                  placeholder={filter.operator === "IN" ? "value1, value2" : "Value"}
+                                  className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                                />
+                                {filter.operator === "BETWEEN" ? (
+                                  <input
+                                    value={filter.secondValue ?? ""}
+                                    onChange={(event) => updateFilter(filter.id, { secondValue: event.target.value })}
+                                    placeholder="And"
+                                    className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                                  />
+                                ) : null}
+                              </>
+                            ) : (
+                              <div className="rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-slate-400">No value needed</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </CompactBuilderSection>
+
+              <CompactBuilderSection title="Sort" subtitle="Selected columns or aggregate aliases." summary={sortSummary} defaultOpen={builderState.sort.length > 0}>
+                <div className="mb-2 flex items-center justify-end">
+                  <button
+                    onClick={() =>
+                      setBuilderState((current) =>
+                        current
+                          ? {
+                              ...current,
+                              sort: [...current.sort, { column: sortOptions[0] ?? relation.columns[0].name, direction: "desc" }]
+                            }
+                          : current
+                      )
+                    }
+                    className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                  >
+                    Add sort
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {builderState.sort.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No sort applied.</div>
+                  ) : (
+                    builderState.sort.map((sort, index) => (
+                      <div key={`${sort.column}-${index}`} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5 xl:grid-cols-[minmax(0,1fr)_120px_auto]">
+                        <select
+                          value={sort.column}
+                          onChange={(event) =>
+                            setBuilderState((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    sort: current.sort.map((item, itemIndex) =>
+                                      itemIndex === index ? { ...item, column: event.target.value } : item
+                                    )
+                                  }
+                                : current
+                            )
+                          }
+                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                        >
+                          {sortOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={sort.direction}
+                          onChange={(event) =>
+                            setBuilderState((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    sort: current.sort.map((item, itemIndex) =>
+                                      itemIndex === index ? { ...item, direction: event.target.value as "asc" | "desc" } : item
+                                    )
+                                  }
+                                : current
+                            )
+                          }
+                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
+                        >
+                          <option value="asc">ASC</option>
+                          <option value="desc">DESC</option>
+                        </select>
+                        <button
+                          onClick={() =>
+                            setBuilderState((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    sort: current.sort.filter((_, itemIndex) => itemIndex !== index)
+                                  }
+                                : current
+                            )
+                          }
+                          className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+                        >
+                          X
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CompactBuilderSection>
+            </div>
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="SQL Editor"
+        subtitle="Write or edit a query, validate it, and run it when it looks right."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            {lastGeneratedByAi ? (
+              <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">Generated by AI</span>
+            ) : null}
+            <span
+              className={classNames(
+                "rounded-full border px-3 py-1 text-xs",
+                isCustomSql ? "border-amber-400/30 bg-amber-400/10 text-amber-100" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+              )}
+            >
+              {isCustomSql ? "Custom SQL" : "Builder linked"}
+            </span>
+            <button
+              onClick={() => {
+                setIsCustomSql(false);
+                setSql(generatedSql);
+                setLastGeneratedByAi(false);
+              }}
+              disabled={!generatedSql}
+              className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Reset to builder SQL
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+            Use read-only SELECT queries only. You can filter, group, join approved datasets, and work with CTEs or subqueries.
+          </div>
+          <textarea
+            value={sql}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setSql(nextValue);
+              setIsCustomSql(nextValue !== generatedSql);
+              if (lastGeneratedByAi && nextValue !== generatedSql) {
+                setLastGeneratedByAi(true);
+              }
+            }}
+            spellCheck={false}
+            className="min-h-[320px] w-full rounded-3xl border border-white/10 bg-slate-950/75 px-4 py-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-emerald-400"
+          />
+          <div className="text-xs text-slate-400">Generated SQL stays editable. You can inspect and tweak it before or after validation.</div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={() => void runValidation()}
+              disabled={requestStatus === "validating" || requestStatus === "running" || sql.trim().length === 0}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {requestStatus === "validating" ? "Validating…" : "Validate query"}
+            </button>
+            <button
+              onClick={() => void runQuery()}
+              disabled={!canRun || requestStatus === "running" || requestStatus === "validating"}
+              className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {requestStatus === "running" ? "Running…" : "Run query"}
+            </button>
+            <button
+              onClick={() => void exportResults()}
+              disabled={!canExport || exportPending}
+              className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-medium text-sky-100 transition hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exportPending ? "Exporting…" : "Export CSV"}
+            </button>
+          </div>
+          <QueryIssues issues={clientIssues} />
+          {latestIssues.length > 0 && requestStatus !== "running" && requestStatus !== "validating" ? <QueryIssues issues={latestIssues} /> : null}
+          {lastValidation?.ok ? (
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+              Validation passed. The backend will execute the normalized read-only query with a limit of {formatNumber(lastValidation.appliedLimit ?? 0, 0)} rows.
+            </div>
+          ) : null}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Results"
+        subtitle="Validated query output appears here with row counts, timing, and the applied row cap."
+        actions={
+          <button
+            onClick={() => void exportResults()}
+            disabled={!canExport || exportPending}
+            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {exportPending ? "Exporting…" : "Export CSV"}
+          </button>
+        }
+      >
+        <ResultsTable
+          result={lastResult}
+          status={requestStatus}
+          overlayText={requestStatus === "running" ? "Running query…" : requestStatus === "validating" ? "Validating query…" : undefined}
+        />
+      </SectionCard>
+    </div>
+  </>
+);
+
 export const QueryPage = () => {
   const metadataQuery = useQuery({
     queryKey: ["query-metadata"],
@@ -593,6 +1445,9 @@ export const QueryPage = () => {
   });
   const generateSqlMutation = useMutation({
     mutationFn: (prompt: string) => api.generateQuerySql(prompt)
+  });
+  const followUpMutation = useMutation({
+    mutationFn: api.queryFollowUp
   });
   const validateMutation = useMutation({
     mutationFn: (sql: string) => api.validateQuery(sql)
@@ -605,6 +1460,11 @@ export const QueryPage = () => {
   });
 
   const metadata = metadataQuery.data;
+  const [viewMode, setViewMode] = useState<ViewMode>("chat");
+  const [composerAction, setComposerAction] = useState<ComposerAction>("create-query");
+  const [composerText, setComposerText] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [builderState, setBuilderState] = useState<QueryBuilderState | null>(null);
   const [sql, setSql] = useState("");
   const [isCustomSql, setIsCustomSql] = useState(false);
@@ -612,10 +1472,6 @@ export const QueryPage = () => {
   const [lastResult, setLastResult] = useState<QueryRunResponse | null>(null);
   const [requestStatus, setRequestStatus] = useState<RequestStatus>("idle");
   const [requestIssues, setRequestIssues] = useState<QueryValidationIssue[]>([]);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiStatus, setAiStatus] = useState<AiStatus>("idle");
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [lastAiPrompt, setLastAiPrompt] = useState("");
   const [lastGeneratedByAi, setLastGeneratedByAi] = useState(false);
 
   useEffect(() => {
@@ -647,7 +1503,11 @@ export const QueryPage = () => {
             groupBy: current.groupBy.filter((column) => nextRelation.columns.some((item) => item.name === column)),
             aggregates: current.aggregates.filter((aggregate) => nextRelation.columns.some((item) => item.name === aggregate.column)),
             filters: current.filters.filter((filter) => nextRelation.columns.some((item) => item.name === filter.column)),
-            sort: current.sort.filter((sort) => nextRelation.columns.some((item) => item.name === sort.column) || current.aggregates.some((aggregate) => (aggregate.alias?.trim() || `${aggregate.func.toLowerCase()}_${aggregate.column}`) === sort.column)),
+            sort: current.sort.filter(
+              (sort) =>
+                nextRelation.columns.some((item) => item.name === sort.column) ||
+                current.aggregates.some((aggregate) => (aggregate.alias?.trim() || `${aggregate.func.toLowerCase()}_${aggregate.column}`) === sort.column)
+            ),
             limit: Math.min(current.limit, nextRelation.maxLimit) || nextRelation.defaultLimit
           }
         : current
@@ -660,10 +1520,12 @@ export const QueryPage = () => {
   const canRun = clientIssues.length === 0 && sql.trim().length > 0;
   const metadataIssues = useMemo(() => normalizeRequestIssues(metadataQuery.error), [metadataQuery.error]);
   const canExport = sql.trim().length > 0 && clientIssues.length === 0 && requestStatus !== "running" && requestStatus !== "validating";
-  const aggregateSummary = builderState?.aggregates.length ? `${builderState.aggregates.length} aggregate${builderState.aggregates.length === 1 ? "" : "s"}` : "No aggregates";
+  const aggregateSummary = builderState?.aggregates.length
+    ? `${builderState.aggregates.length} aggregate${builderState.aggregates.length === 1 ? "" : "s"}`
+    : "No aggregates";
   const filterSummary = builderState?.filters.length ? `${builderState.filters.length} filter${builderState.filters.length === 1 ? "" : "s"}` : "No filters";
   const sortSummary = builderState?.sort.length ? `${builderState.sort.length} sort rule${builderState.sort.length === 1 ? "" : "s"}` : "No sorting";
-  const isBusy = requestStatus === "validating" || requestStatus === "running" || generateSqlMutation.isPending;
+  const isBusy = requestStatus === "validating" || requestStatus === "running" || generateSqlMutation.isPending || followUpMutation.isPending;
 
   useEffect(() => {
     if (!generatedSql) {
@@ -681,6 +1543,8 @@ export const QueryPage = () => {
     const aggregateAliases = builderState.aggregates.map((aggregate) => aggregate.alias?.trim() || `${aggregate.func.toLowerCase()}_${aggregate.column}`);
     return [...new Set([...relation.columns.filter((column) => column.sortable).map((column) => column.name), ...aggregateAliases])];
   }, [relation, builderState]);
+
+  const latestQueryContext = useMemo(() => summarizeLatestQuery(sql, lastValidation, lastResult), [sql, lastValidation, lastResult]);
 
   const setRelation = (relationName: string) => {
     if (!metadata) {
@@ -790,626 +1654,180 @@ export const QueryPage = () => {
     }
   };
 
-  const submitAiPrompt = async (promptOverride?: string) => {
-    const prompt = (promptOverride ?? aiPrompt).trim();
-    if (!prompt) {
-      setAiError("Enter a question to generate SQL.");
-      setAiStatus("error");
-      return;
-    }
+  const pushUserMessage = (action: ComposerAction, text: string) => {
+    const message: UserChatMessage = { id: makeChatId(), kind: "user", action, text };
+    setChatMessages((current) => [...current, message]);
+  };
 
-    setAiPrompt(prompt);
-    setAiError(null);
-    setAiStatus("generating");
-    setLastAiPrompt(prompt);
-    setRequestIssues([]);
+  const pushNotice = (title: string, detail: string, tone: "danger" | "muted" = "danger") => {
+    const message: NoticeChatMessage = { id: makeChatId(), kind: "notice", title, detail, tone };
+    setChatMessages((current) => [...current, message]);
+  };
 
+  const handleCreateQuery = async (prompt: string) => {
     try {
-      const result = await generateSqlMutation.mutateAsync(prompt);
-      const issues = frontendLint(result.sql);
-      if (issues.length > 0) {
-        setAiStatus("error");
-        setAiError(issues[0]?.message ?? "The AI helper returned invalid SQL.");
-        setLastValidation({ ok: false, issues });
-        setRequestIssues(issues);
+      const generated = await generateSqlMutation.mutateAsync(prompt);
+      const lintIssues = frontendLint(generated.sql);
+
+      setSql(generated.sql);
+      setIsCustomSql(true);
+      setLastGeneratedByAi(true);
+
+      if (lintIssues.length > 0) {
+        const validation = { ok: false, issues: lintIssues } satisfies QueryValidationResponse;
+        setLastValidation(validation);
+        setRequestIssues(lintIssues);
+        setChatMessages((current) => [...current, { id: makeChatId(), kind: "create-query", sql: generated.sql, validation, result: null }]);
         return;
       }
 
-      setSql(result.sql);
-      setIsCustomSql(true);
-      setLastGeneratedByAi(true);
-      setAiStatus("generated");
-      const validation = await runValidation(result.sql);
-      if (validation.ok) {
-        await runQuery(validation.normalizedSql ?? result.sql);
-      } else {
-        setAiStatus("error");
-        setAiError("Generated SQL did not pass validation. Review the validator feedback below.");
+      const validation = await runValidation(generated.sql);
+      if (!validation.ok) {
+        setChatMessages((current) => [...current, { id: makeChatId(), kind: "create-query", sql: generated.sql, validation, result: null }]);
+        return;
       }
+
+      const runResult = await runQuery(validation.normalizedSql ?? generated.sql);
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: makeChatId(),
+          kind: "create-query",
+          sql: validation.normalizedSql ?? generated.sql,
+          validation,
+          result: runResult
+        }
+      ]);
     } catch (error) {
       const message =
-        error instanceof QueryRequestError ? error.message : error instanceof Error ? error.message : "The AI helper failed unexpectedly.";
-      setAiStatus("error");
-      setAiError(message);
+        error instanceof QueryRequestError ? error.message : error instanceof Error ? error.message : "The create-query assistant failed unexpectedly.";
+      setChatError(message);
+      pushNotice("Create query failed", message, "danger");
     }
+  };
+
+  const handleFollowUp = async (prompt: string) => {
+    try {
+      const result: QueryFollowUpResponse = await followUpMutation.mutateAsync({
+        prompt,
+        history: buildFollowUpHistory(chatMessages),
+        latestQuery: latestQueryContext
+      });
+
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: makeChatId(),
+          kind: "follow-up",
+          answer: result.answer,
+          suggestedSql: result.suggestedSql,
+          warning: result.warning
+        }
+      ]);
+    } catch (error) {
+      const message =
+        error instanceof QueryRequestError ? error.message : error instanceof Error ? error.message : "The follow-up assistant failed unexpectedly.";
+      setChatError(message);
+      pushNotice("Follow up failed", message, "danger");
+    }
+  };
+
+  const submitComposer = async (forcedAction?: ComposerAction, forcedPrompt?: string) => {
+    const action = forcedAction ?? composerAction;
+    const prompt = (forcedPrompt ?? composerText).trim();
+    if (!prompt) {
+      setChatError("Enter a prompt to continue.");
+      return;
+    }
+
+    setChatError(null);
+    pushUserMessage(action, prompt);
+
+    if (!forcedPrompt) {
+      setComposerText("");
+    }
+
+    if (action === "create-query") {
+      await handleCreateQuery(prompt);
+      return;
+    }
+
+    await handleFollowUp(prompt);
+  };
+
+  const useSuggestedSql = (suggestedSql: string) => {
+    setSql(suggestedSql);
+    setIsCustomSql(true);
+    setLastGeneratedByAi(false);
+    setViewMode("manual");
   };
 
   return (
     <AppShell
       title="Query"
-      subtitle="Explore approved analytics data with read-only SQL, guided filters, and validated query results."
+      subtitle="Chat-first query workspace for GrizCam analytics, with a manual builder mode when you need full control."
       badge={`${appEnv.demoLabel} • Read-only workspace`}
       aside={
-        metadataQuery.isError ? (
-          <CompactExampleRail
-            examples={[]}
-            onSelect={loadExample}
-          />
-        ) : metadata ? (
-          <CompactExampleRail examples={metadata.examples} onSelect={loadExample} />
-        ) : (
-          <aside className="panel rounded-[28px] p-4">
-            <div className="mb-3 text-xl font-semibold text-white">Examples</div>
-            <div className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-400">
-              Loading examples…
-            </div>
-          </aside>
-        )
+        <ModeSidebar
+          viewMode={viewMode}
+          onSelectMode={setViewMode}
+          onPromptExample={(prompt) => {
+            setViewMode("chat");
+            setComposerAction("create-query");
+            void submitComposer("create-query", prompt);
+          }}
+          latestQuery={latestQueryContext}
+        />
       }
     >
-      <SectionCard
-        title="Safety Model"
-        subtitle={metadata?.helpText.title ?? "Read-only query workspace"}
-        actions={<span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-100">SELECT only</span>}
-      >
-        <p className="max-w-4xl text-sm leading-6 text-slate-300">
-          {metadata?.helpText.body ??
-            "The backend validates every query before execution. Comments, write statements, unsafe relations, and oversized limits are blocked server-side."}
-        </p>
-        {metadataQuery.isError ? <div className="mt-4"><QueryIssues issues={metadataIssues} /></div> : null}
-      </SectionCard>
-
-      <SectionCard
-        title="AI Query Assist"
-        subtitle="Turn a plain-English question into SQL, then let the existing validator and runner handle the rest."
-      >
-        <AiCommandBar
-          prompt={aiPrompt}
-          onPromptChange={(value) => {
-            setAiPrompt(value);
-            if (aiStatus === "error") {
-              setAiError(null);
-              setAiStatus("idle");
-            }
-          }}
-          onSubmit={() => void submitAiPrompt()}
-          onExample={(value) => {
-            setAiPrompt(value);
-            void submitAiPrompt(value);
-          }}
-          onRetry={() => void submitAiPrompt(lastAiPrompt)}
-          disabled={isBusy}
-          status={aiStatus}
-          error={aiError}
-          canRetry={lastAiPrompt.trim().length > 0}
+      {viewMode === "chat" ? (
+        <ChatWorkspace
+          messages={chatMessages}
+          composerText={composerText}
+          composerAction={composerAction}
+          onComposerTextChange={setComposerText}
+          onComposerActionChange={setComposerAction}
+          onSubmit={() => void submitComposer()}
+          onUseSuggestedSql={useSuggestedSql}
+          isBusy={isBusy}
+          error={chatError}
+          requestStatus={requestStatus}
         />
-      </SectionCard>
-
-      <div className="grid gap-4">
-        <SectionCard
-          title="Query Builder"
-          subtitle="Choose a dataset, pick the fields you want, and narrow the results with filters, grouping, and sorting."
-        >
-          {metadataQuery.isError ? (
-            <QueryIssues issues={metadataIssues} />
-          ) : !metadata || !builderState || !relation ? (
-            <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-400">
-              Loading the approved query catalog…
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_140px]">
-                <label className="space-y-2 text-sm text-slate-300">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Relation</span>
-                  <select
-                    value={builderState.relation}
-                    onChange={(event) => setRelation(event.target.value)}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                  >
-                    {metadata.relations.map((item) => (
-                      <option key={item.name} value={item.name}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-2 text-sm text-slate-300">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Limit</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={relation.maxLimit}
-                    value={builderState.limit}
-                    onChange={(event) =>
-                      setBuilderState((current) =>
-                        current
-                          ? {
-                              ...current,
-                              limit: Math.max(1, Math.min(Number(event.target.value) || relation.defaultLimit, relation.maxLimit))
-                            }
-                          : current
-                      )
-                    }
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-emerald-400"
-                  />
-                </label>
-              </div>
-
-              <div className="grid gap-3 xl:grid-cols-2">
-                <MultiSelectDropdown
-                  title="Selectable columns"
-                  subtitle={relation.description}
-                  values={builderState.columns}
-                  options={relation.columns.map((column) => ({ name: column.name, label: column.label }))}
-                  onToggle={(name) =>
-                    setBuilderState((current) =>
-                      current
-                        ? {
-                            ...current,
-                            columns: current.columns.includes(name)
-                              ? current.columns.filter((value) => value !== name)
-                              : [...current.columns, name]
-                          }
-                        : current
-                    )
-                  }
-                  onReset={() =>
-                    setBuilderState((current) =>
-                      current
-                        ? {
-                            ...current,
-                            columns: relation.defaultColumns,
-                            groupBy: current.groupBy.filter((column) => relation.defaultColumns.includes(column))
-                          }
-                        : current
-                    )
-                  }
-                  emptyLabel="No columns selected yet."
-                />
-
-                <MultiSelectDropdown
-                  title="Group by"
-                  subtitle="Choose dimensions for aggregate breakouts."
-                  values={builderState.groupBy}
-                  options={relation.columns.filter((column) => column.groupable).map((column) => ({ name: column.name, label: column.label }))}
-                  onToggle={(name) =>
-                    setBuilderState((current) =>
-                      current
-                        ? {
-                            ...current,
-                            groupBy: current.groupBy.includes(name)
-                              ? current.groupBy.filter((value) => value !== name)
-                              : [...current.groupBy, name]
-                          }
-                        : current
-                    )
-                  }
-                  onReset={() =>
-                    setBuilderState((current) =>
-                      current
-                        ? {
-                            ...current,
-                            groupBy: []
-                          }
-                        : current
-                    )
-                  }
-                  emptyLabel="No grouping applied."
-                />
-              </div>
-
-              <div className="grid gap-3 xl:grid-cols-3">
-                <CompactBuilderSection
-                  title="Aggregates"
-                  subtitle="Optional rollups for metric summaries."
-                  summary={aggregateSummary}
-                >
-                  <div className="space-y-2">
-                    {builderState.aggregates.map((aggregate, index) => (
-                      <div key={`${aggregate.column}-${index}`} className="grid gap-2 lg:grid-cols-[110px_minmax(0,1fr)_auto]">
-                        <select
-                          value={aggregate.func}
-                          onChange={(event) =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    aggregates: current.aggregates.map((item, itemIndex) =>
-                                      itemIndex === index ? { ...item, func: event.target.value as typeof item.func } : item
-                                    )
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                        >
-                          {metadata.allowedAggregates.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={aggregate.column}
-                          onChange={(event) =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    aggregates: current.aggregates.map((item, itemIndex) =>
-                                      itemIndex === index ? { ...item, column: event.target.value } : item
-                                    )
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                        >
-                          {relation.columns
-                            .filter((column) => column.aggregates.length > 0)
-                            .map((column) => (
-                              <option key={column.name} value={column.name}>
-                                {column.label}
-                              </option>
-                            ))}
-                        </select>
-                        <button
-                          onClick={() =>
-                            setBuilderState((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    aggregates: current.aggregates.filter((_, itemIndex) => itemIndex !== index)
-                                  }
-                                : current
-                            )
-                          }
-                          className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                        >
-                          X
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() =>
-                        setBuilderState((current) =>
-                          current
-                            ? {
-                                ...current,
-                                aggregates: [
-                                  ...current.aggregates,
-                                  {
-                                    column: relation.columns.find((column) => column.aggregates.length > 0)?.name ?? relation.columns[0].name,
-                                    func: "COUNT",
-                                    alias: ""
-                                  }
-                                ]
-                              }
-                            : current
-                        )
-                      }
-                      className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200 transition hover:bg-white/10"
-                    >
-                      Add aggregate
-                    </button>
-                  </div>
-                </CompactBuilderSection>
-
-                <CompactBuilderSection
-                  title="Filters"
-                  subtitle="Safe row-level conditions."
-                  summary={filterSummary}
-                  defaultOpen={builderState.filters.length > 0}
-                >
-                  <div className="mb-2 flex items-center justify-end">
-                    <button
-                      onClick={() =>
-                        setBuilderState((current) =>
-                          current
-                            ? {
-                                ...current,
-                                filters: [
-                                  ...current.filters,
-                                  {
-                                    id: makeFilterId(),
-                                    column: relation.columns[0].name,
-                                    operator: relation.columns[0].filterOperators[0]
-                                  }
-                                ]
-                              }
-                            : current
-                        )
-                      }
-                      className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                    >
-                      Add filter
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {builderState.filters.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No filters yet.</div>
-                    ) : (
-                      builderState.filters.map((filter) => {
-                        const column = relation.columns.find((item) => item.name === filter.column) ?? relation.columns[0];
-                        return (
-                          <div key={filter.id} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5">
-                            <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_130px_auto]">
-                              <select
-                                value={filter.column}
-                                onChange={(event) => {
-                                  const nextColumn = relation.columns.find((item) => item.name === event.target.value) ?? relation.columns[0];
-                                  updateFilter(filter.id, { column: nextColumn.name, operator: nextColumn.filterOperators[0], value: "", secondValue: "" });
-                                }}
-                                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                              >
-                                {relation.columns.map((item) => (
-                                  <option key={item.name} value={item.name}>
-                                    {item.label}
-                                  </option>
-                                ))}
-                              </select>
-                              <select
-                                value={filter.operator}
-                                onChange={(event) => updateFilter(filter.id, { operator: event.target.value as QueryOperator })}
-                                className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                              >
-                                {column.filterOperators.map((operator) => (
-                                  <option key={operator} value={operator}>
-                                    {formatOperatorLabel(operator)}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                onClick={() =>
-                                  setBuilderState((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          filters: current.filters.filter((item) => item.id !== filter.id)
-                                        }
-                                      : current
-                                  )
-                                }
-                                className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                              >
-                                X
-                              </button>
-                            </div>
-                            <div className={classNames("grid gap-2", filter.operator === "BETWEEN" ? "md:grid-cols-2" : "grid-cols-1")}>
-                              {filter.operator !== "IS NULL" && filter.operator !== "IS NOT NULL" ? (
-                                <>
-                                  <input
-                                    value={filter.value ?? ""}
-                                    onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
-                                    placeholder={filter.operator === "IN" ? "value1, value2" : "Value"}
-                                    className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                                  />
-                                  {filter.operator === "BETWEEN" ? (
-                                    <input
-                                      value={filter.secondValue ?? ""}
-                                      onChange={(event) => updateFilter(filter.id, { secondValue: event.target.value })}
-                                      placeholder="And"
-                                      className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                                    />
-                                  ) : null}
-                                </>
-                              ) : (
-                                <div className="rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-slate-400">No value needed</div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </CompactBuilderSection>
-
-                <CompactBuilderSection
-                  title="Sort"
-                  subtitle="Selected columns or aggregate aliases."
-                  summary={sortSummary}
-                  defaultOpen={builderState.sort.length > 0}
-                >
-                  <div className="mb-2 flex items-center justify-end">
-                  <button
-                    onClick={() =>
-                      setBuilderState((current) =>
-                        current
-                          ? {
-                              ...current,
-                              sort: [...current.sort, { column: sortOptions[0] ?? relation.columns[0].name, direction: "desc" }]
-                            }
-                          : current
-                      )
-                    }
-                    className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                  >
-                    Add sort
-                  </button>
-                  </div>
-                  <div className="space-y-2">
-                  {builderState.sort.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-3 text-xs text-slate-400">No sort applied.</div>
-                  ) : (
-                    builderState.sort.map((sort, index) => (
-                      <div key={`${sort.column}-${index}`} className="grid gap-2 rounded-2xl border border-white/5 bg-slate-950/35 p-2.5 xl:grid-cols-[minmax(0,1fr)_120px_auto]">
-                          <select
-                            value={sort.column}
-                            onChange={(event) =>
-                              setBuilderState((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      sort: current.sort.map((item, itemIndex) =>
-                                        itemIndex === index ? { ...item, column: event.target.value } : item
-                                      )
-                                    }
-                                  : current
-                              )
-                            }
-                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                          >
-                            {sortOptions.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={sort.direction}
-                            onChange={(event) =>
-                              setBuilderState((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      sort: current.sort.map((item, itemIndex) =>
-                                        itemIndex === index ? { ...item, direction: event.target.value as "asc" | "desc" } : item
-                                      )
-                                    }
-                                  : current
-                              )
-                            }
-                            className="rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 outline-none focus:border-emerald-400"
-                          >
-                            <option value="asc">ASC</option>
-                            <option value="desc">DESC</option>
-                          </select>
-                          <button
-                            onClick={() =>
-                              setBuilderState((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      sort: current.sort.filter((_, itemIndex) => itemIndex !== index)
-                                    }
-                                  : current
-                              )
-                            }
-                            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
-                          >
-                            X
-                          </button>
-                      </div>
-                    ))
-                  )}
-                  </div>
-                </CompactBuilderSection>
-              </div>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="SQL Editor"
-          subtitle="Write or edit a query, validate it, and run it when it looks right."
-          actions={
-            <div className="flex flex-wrap gap-2">
-              {lastGeneratedByAi ? (
-                <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">Generated by AI</span>
-              ) : null}
-              <span
-                className={classNames(
-                  "rounded-full border px-3 py-1 text-xs",
-                  isCustomSql ? "border-amber-400/30 bg-amber-400/10 text-amber-100" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
-                )}
-              >
-                {isCustomSql ? "Custom SQL" : "Builder linked"}
-              </span>
-              <button
-                onClick={() => {
-                  setIsCustomSql(false);
-                  setSql(generatedSql);
-                  setLastGeneratedByAi(false);
-                }}
-                disabled={!generatedSql}
-                className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Reset to builder SQL
-              </button>
-            </div>
-          }
-        >
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Use read-only SELECT queries only. You can filter, group, join approved datasets, and work with CTEs or subqueries.
-              </div>
-            <textarea
-              value={sql}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                setSql(nextValue);
-                setIsCustomSql(nextValue !== generatedSql);
-                if (lastGeneratedByAi && nextValue !== generatedSql) {
-                  setLastGeneratedByAi(true);
-                }
-              }}
-              spellCheck={false}
-              className="min-h-[320px] w-full rounded-3xl border border-white/10 bg-slate-950/75 px-4 py-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-emerald-400"
-            />
-            <div className="text-xs text-slate-400">Generated SQL stays editable. You can inspect and tweak it before or after validation.</div>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => void runValidation()}
-                disabled={isBusy || sql.trim().length === 0}
-                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {requestStatus === "validating" ? "Validating…" : "Validate query"}
-              </button>
-              <button
-                onClick={() => void runQuery()}
-                disabled={!canRun || isBusy}
-                className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {requestStatus === "running" ? "Running…" : "Run query"}
-              </button>
-              <button
-                onClick={exportResults}
-                disabled={!canExport || exportMutation.isPending}
-                className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-medium text-sky-100 transition hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {exportMutation.isPending ? "Exporting…" : "Export CSV"}
-              </button>
-            </div>
-            <QueryIssues issues={clientIssues} />
-            {latestIssues.length > 0 && requestStatus !== "running" && requestStatus !== "validating" ? <QueryIssues issues={latestIssues} /> : null}
-            {lastValidation?.ok ? (
-              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-                Validation passed. The backend will execute the normalized read-only query with a limit of {formatNumber(lastValidation.appliedLimit ?? 0, 0)} rows.
-              </div>
-            ) : null}
-          </div>
-        </SectionCard>
-      </div>
-
-      <SectionCard
-        title="Results"
-        subtitle="Validated query output appears here with row counts, timing, and the applied row cap."
-        actions={
-          <button
-            onClick={exportResults}
-            disabled={!canExport || exportMutation.isPending}
-            className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {exportMutation.isPending ? "Exporting…" : "Export CSV"}
-          </button>
-        }
-      >
-        <ResultsTable
-          result={lastResult}
-          status={requestStatus}
-          overlayText={requestStatus === "running" ? "Running query…" : requestStatus === "validating" ? "Validating query…" : undefined}
+      ) : (
+        <ManualWorkspace
+          metadataQueryError={metadataQuery.isError}
+          metadataIssues={metadataIssues}
+          metadata={metadata}
+          builderState={builderState}
+          relation={relation}
+          aggregateSummary={aggregateSummary}
+          filterSummary={filterSummary}
+          sortSummary={sortSummary}
+          sortOptions={sortOptions}
+          setRelation={setRelation}
+          setBuilderState={setBuilderState}
+          updateFilter={updateFilter}
+          loadExample={loadExample}
+          sql={sql}
+          generatedSql={generatedSql}
+          setSql={setSql}
+          isCustomSql={isCustomSql}
+          setIsCustomSql={setIsCustomSql}
+          lastGeneratedByAi={lastGeneratedByAi}
+          setLastGeneratedByAi={setLastGeneratedByAi}
+          requestStatus={requestStatus}
+          runValidation={runValidation}
+          runQuery={runQuery}
+          exportResults={exportResults}
+          clientIssues={clientIssues}
+          latestIssues={latestIssues}
+          lastValidation={lastValidation}
+          lastResult={lastResult}
+          canRun={canRun}
+          canExport={canExport}
+          exportPending={exportMutation.isPending}
         />
-      </SectionCard>
+      )}
     </AppShell>
   );
 };
