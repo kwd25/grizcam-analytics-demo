@@ -28,9 +28,12 @@ type ComposerAction = "create-query" | "follow-up";
 type CreateQueryChatMessage = {
   id: string;
   kind: "create-query";
+  userIntentSummary: string;
+  queryExplanation: string;
   sql: string;
   validation: QueryValidationResponse;
   result: QueryRunResponse | null;
+  warning?: string;
 };
 
 type FollowUpChatMessage = {
@@ -557,7 +560,7 @@ const buildFollowUpHistory = (messages: ChatMessage[]): QueryChatHistoryMessage[
         const outcome = message.result?.ok ? `Query ran and returned ${message.result.rowCount ?? 0} rows.` : "Query did not complete successfully.";
         return {
           role: "assistant",
-          content: `Generated SQL:\n${message.sql}\nValidation: ${message.validation.ok ? "passed" : "failed"}.\n${outcome}`
+          content: `What I heard:\n${message.userIntentSummary}\n\nHow I approached it:\n${message.queryExplanation}\n\nGenerated SQL:\n${message.sql}\n\nValidation: ${message.validation.ok ? "passed" : "failed"}.\n${outcome}`
         };
       }
 
@@ -703,7 +706,7 @@ const ChatTranscript = ({
   requestStatus: RequestStatus;
   onUseSuggestedSql: (sql: string) => void;
 }) => (
-  <div className="space-y-4">
+  <div className="space-y-5 px-1 pb-2">
     {messages.length === 0 ? (
       <div className="rounded-3xl border border-dashed border-white/10 px-6 py-12 text-center">
         <div className="text-lg font-medium text-white">Ask for a query or follow up on the data</div>
@@ -769,7 +772,7 @@ const ChatTranscript = ({
 
       return (
         <div key={message.id} className="flex justify-start">
-          <div className="max-w-[95%] space-y-4 rounded-[28px] border border-white/10 bg-white/5 px-4 py-4">
+          <div className="max-w-[96%] space-y-5 rounded-[32px] border border-white/10 bg-white/5 px-5 py-5">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-100">
                 {message.validation.ok ? "Validation passed" : "Validation failed"}
@@ -785,7 +788,22 @@ const ChatTranscript = ({
                 </span>
               ) : null}
             </div>
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">What I heard</div>
+                <div className="mt-2 rounded-2xl border border-white/10 bg-slate-950/45 px-4 py-3 text-sm leading-7 text-slate-200">
+                  <MarkdownMessage markdown={message.userIntentSummary} />
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">How I approached it</div>
+                <div className="mt-2 rounded-2xl border border-white/10 bg-slate-950/45 px-4 py-3 text-sm leading-7 text-slate-200">
+                  <MarkdownMessage markdown={message.queryExplanation} />
+                </div>
+              </div>
+            </div>
             <CodePanel title="Generated SQL" code={message.sql} />
+            {message.warning ? <QueryIssues issues={[{ code: "INVALID_QUERY", message: message.warning }]} tone="muted" /> : null}
             {!message.validation.ok ? <QueryIssues issues={message.validation.issues} /> : null}
             {message.validation.ok ? (
               <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
@@ -844,7 +862,7 @@ const ChatWorkspace = ({
       <SectionCard
         title="Query Chat"
         subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
-        className="h-[78vh]"
+        className="h-[calc(100vh-2.5rem)] min-h-[820px]"
       >
         <div className="flex h-full min-h-0 flex-col">
           <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
@@ -861,7 +879,7 @@ const ChatWorkspace = ({
           >
             <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
           </div>
-          <div className="mt-4 border-t border-white/10 pt-4">
+          <div className="mt-5 border-t border-white/10 pt-5">
             <div className="rounded-[28px] border border-white/10 bg-slate-950/50 p-4">
               <textarea
                 value={composerText}
@@ -874,7 +892,7 @@ const ChatWorkspace = ({
                 }}
                 placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or what a result means"}
                 spellCheck={false}
-                className="min-h-[90px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
+                className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
               />
               <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap gap-2">
@@ -1733,6 +1751,7 @@ export const QueryPage = () => {
   const pushUserMessage = (action: ComposerAction, text: string) => {
     const message: UserChatMessage = { id: makeChatId(), kind: "user", action, text };
     setChatMessages((current) => [...current, message]);
+    return message;
   };
 
   const pushNotice = (title: string, detail: string, tone: "danger" | "muted" = "danger") => {
@@ -1753,13 +1772,37 @@ export const QueryPage = () => {
         const validation = { ok: false, issues: lintIssues } satisfies QueryValidationResponse;
         setLastValidation(validation);
         setRequestIssues(lintIssues);
-        setChatMessages((current) => [...current, { id: makeChatId(), kind: "create-query", sql: generated.sql, validation, result: null }]);
+        setChatMessages((current) => [
+          ...current,
+          {
+            id: makeChatId(),
+            kind: "create-query",
+            userIntentSummary: generated.userIntentSummary,
+            queryExplanation: generated.queryExplanation,
+            sql: generated.sql,
+            validation,
+            result: null,
+            warning: generated.warning
+          }
+        ]);
         return;
       }
 
       const validation = await runValidation(generated.sql);
       if (!validation.ok) {
-        setChatMessages((current) => [...current, { id: makeChatId(), kind: "create-query", sql: generated.sql, validation, result: null }]);
+        setChatMessages((current) => [
+          ...current,
+          {
+            id: makeChatId(),
+            kind: "create-query",
+            userIntentSummary: generated.userIntentSummary,
+            queryExplanation: generated.queryExplanation,
+            sql: generated.sql,
+            validation,
+            result: null,
+            warning: generated.warning
+          }
+        ]);
         return;
       }
 
@@ -1769,9 +1812,12 @@ export const QueryPage = () => {
         {
           id: makeChatId(),
           kind: "create-query",
+          userIntentSummary: generated.userIntentSummary,
+          queryExplanation: generated.queryExplanation,
           sql: validation.normalizedSql ?? generated.sql,
           validation,
-          result: runResult
+          result: runResult,
+          warning: generated.warning
         }
       ]);
     } catch (error) {
@@ -1782,11 +1828,11 @@ export const QueryPage = () => {
     }
   };
 
-  const handleFollowUp = async (prompt: string) => {
+  const handleFollowUp = async (prompt: string, historyMessages: ChatMessage[]) => {
     try {
       const result: QueryFollowUpResponse = await followUpMutation.mutateAsync({
         prompt,
-        history: buildFollowUpHistory(chatMessages),
+        history: buildFollowUpHistory(historyMessages),
         latestQuery: latestQueryContext
       });
 
@@ -1817,7 +1863,8 @@ export const QueryPage = () => {
     }
 
     setChatError(null);
-    pushUserMessage(action, prompt);
+    const userMessage = pushUserMessage(action, prompt);
+    const nextHistory = [...chatMessages, userMessage];
 
     if (!forcedPrompt) {
       setComposerText("");
@@ -1828,7 +1875,7 @@ export const QueryPage = () => {
       return;
     }
 
-    await handleFollowUp(prompt);
+    await handleFollowUp(prompt, nextHistory);
   };
 
   const useSuggestedSql = (suggestedSql: string) => {
