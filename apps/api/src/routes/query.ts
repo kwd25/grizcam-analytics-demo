@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Router } from "express";
 import { getQueryMetadata } from "../query/catalog.js";
+import { answerQueryFollowUp } from "../query/followUp.js";
 import { GenerateSqlError, generateSqlFromPrompt } from "../query/generateSql.js";
 import { exportSafeQueryCsv, runSafeQuery, validateQuerySql } from "../query/service.js";
 
@@ -10,6 +11,36 @@ const queryRequestSchema = z.object({
 
 const generateSqlRequestSchema = z.object({
   prompt: z.string().trim().min(1).max(1_000)
+});
+
+const followUpRequestSchema = z.object({
+  prompt: z.string().trim().min(1).max(2_000),
+  history: z.array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string().min(1).max(4_000)
+    })
+  ),
+  latestQuery: z
+    .object({
+      sql: z.string().optional(),
+      validation: z
+        .object({
+          ok: z.boolean(),
+          appliedLimit: z.number().optional(),
+          issues: z.array(z.string())
+        })
+        .optional(),
+      result: z
+        .object({
+          rowCount: z.number().optional(),
+          durationMs: z.number().optional(),
+          appliedLimit: z.number().optional(),
+          columns: z.array(z.string()).optional()
+        })
+        .optional()
+    })
+    .optional()
 });
 
 const queryExportSchema = queryRequestSchema.extend({
@@ -27,6 +58,21 @@ queryRouter.post("/generate-sql", async (request, response) => {
 
   try {
     const result = await generateSqlFromPrompt(prompt);
+    response.json(result);
+  } catch (error) {
+    if (error instanceof GenerateSqlError) {
+      response.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+
+queryRouter.post("/follow-up", async (request, response) => {
+  const payload = followUpRequestSchema.parse(request.body);
+
+  try {
+    const result = await answerQueryFollowUp(payload);
     response.json(result);
   } catch (error) {
     if (error instanceof GenerateSqlError) {
