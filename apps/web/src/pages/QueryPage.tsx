@@ -862,7 +862,7 @@ const ChatWorkspace = ({
       <SectionCard
         title="Query Chat"
         subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
-        className="h-[calc(100vh-2.5rem)] min-h-[820px]"
+        className="h-[calc(100vh-2.5rem)] min-h-[820px] overflow-hidden"
       >
         <div className="flex h-full min-h-0 flex-col">
           <div
@@ -872,12 +872,12 @@ const ChatWorkspace = ({
               const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
               shouldStickToBottomRef.current = distanceFromBottom < 120;
             }}
-            className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1"
+            className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1 pb-6"
           >
             <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
           </div>
-          <div className="mt-5 border-t border-white/10 pt-5">
-            <div className="rounded-[28px] border border-white/10 bg-slate-950/50 p-4">
+          <div className="sticky bottom-0 z-10 mt-4 border-t border-white/10 bg-[linear-gradient(180deg,rgba(10,15,22,0)_0%,rgba(10,15,22,0.92)_22%,rgba(10,15,22,0.98)_100%)] pt-5 pb-1">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-4 shadow-[0_-18px_48px_rgba(2,6,23,0.42)] backdrop-blur">
               <textarea
                 value={composerText}
                 onChange={(event) => onComposerTextChange(event.target.value)}
