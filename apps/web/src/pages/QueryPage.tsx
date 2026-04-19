@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   QueryBuilderFilter,
@@ -545,7 +545,6 @@ const summarizeLatestQuery = (sql: string, validation: QueryValidationResponse |
 const buildFollowUpHistory = (messages: ChatMessage[]): QueryChatHistoryMessage[] =>
   messages
     .filter((message) => message.kind !== "notice")
-    .slice(-10)
     .map((message) => {
       if (message.kind === "user") {
         return {
@@ -567,6 +566,60 @@ const buildFollowUpHistory = (messages: ChatMessage[]): QueryChatHistoryMessage[
         content: `${message.answer}${message.suggestedSql ? `\nSuggested SQL:\n${message.suggestedSql}` : ""}`
       };
     });
+
+const renderInlineMarkdown = (text: string) => {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.map((part, index) =>
+    /^`[^`]+`$/.test(part) ? (
+      <code key={index} className="rounded bg-slate-950/70 px-1.5 py-0.5 text-[0.95em] text-sky-100">
+        {part.slice(1, -1)}
+      </code>
+    ) : (
+      <span key={index}>{part}</span>
+    )
+  );
+};
+
+const MarkdownMessage = ({ markdown }: { markdown: string }) => {
+  const normalized = markdown.replace(/\r\n/g, "\n").trim();
+  const blocks = normalized.length > 0 ? normalized.split(/\n\s*\n/) : [];
+
+  return (
+    <div className="space-y-3 text-sm leading-7 text-slate-200">
+      {blocks.map((block, blockIndex) => {
+        const trimmed = block.trim();
+        if (/^```/.test(trimmed) && trimmed.endsWith("```")) {
+          const code = trimmed.replace(/^```[^\n]*\n?/, "").replace(/\n?```$/, "");
+          return (
+            <pre key={blockIndex} className="overflow-auto rounded-2xl border border-white/10 bg-slate-950/75 p-4 text-xs leading-6 text-slate-100">
+              <code>{code}</code>
+            </pre>
+          );
+        }
+
+        const lines = trimmed.split("\n");
+        const bulletLines = lines.filter((line) => /^[-*]\s+/.test(line.trim()));
+        if (bulletLines.length === lines.length && bulletLines.length > 0) {
+          return (
+            <ul key={blockIndex} className="space-y-2 pl-5 text-slate-200">
+              {bulletLines.map((line, lineIndex) => (
+                <li key={lineIndex} className="list-disc">
+                  {renderInlineMarkdown(line.replace(/^[-*]\s+/, ""))}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <p key={blockIndex} className="whitespace-pre-wrap">
+            {renderInlineMarkdown(trimmed)}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
 
 const ModeSidebar = ({
   viewMode,
@@ -690,7 +743,9 @@ const ChatTranscript = ({
           <div key={message.id} className="flex justify-start">
             <div className="max-w-[92%] rounded-[28px] border border-white/10 bg-white/5 px-4 py-4">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Follow up</div>
-              <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">{message.answer}</div>
+              <div className="mt-3">
+                <MarkdownMessage markdown={message.answer} />
+              </div>
               {message.warning ? (
                 <div className="mt-3">
                   <QueryIssues issues={[{ code: "INVALID_QUERY", message: message.warning }]} tone="muted" />
@@ -772,67 +827,88 @@ const ChatWorkspace = ({
   isBusy: boolean;
   error: string | null;
   requestStatus: RequestStatus;
-}) => (
-  <>
-    <SectionCard
-      title="Query Chat"
-      subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
-      className="min-h-[78vh]"
-    >
-      <div className="flex min-h-[68vh] flex-col">
-        <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-          Read-only workspace. Create query will generate, validate, and optionally run SQL. Follow up is advisory and may suggest SQL without executing it.
-        </div>
-        <div className="mt-4 flex-1 overflow-y-auto pr-1">
-          <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
-        </div>
-        <div className="mt-4 border-t border-white/10 pt-4">
-          <div className="rounded-[28px] border border-white/10 bg-slate-950/50 p-4">
-            <textarea
-              value={composerText}
-              onChange={(event) => onComposerTextChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  onSubmit();
-                }
-              }}
-              placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or how to refine it"}
-              spellCheck={false}
-              className="min-h-[90px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
-            />
-            <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {(["create-query", "follow-up"] as ComposerAction[]).map((action) => (
-                  <button
-                    key={action}
-                    onClick={() => onComposerActionChange(action)}
-                    className={classNames(
-                      "rounded-full border px-3 py-2 text-xs font-medium transition",
-                      composerAction === action
-                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
-                        : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
-                    )}
-                  >
-                    {action === "create-query" ? "Create query" : "Follow up"}
-                  </button>
-                ))}
+}) => {
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    const node = logRef.current;
+    if (!node || !shouldStickToBottomRef.current) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [messages, isBusy]);
+
+  return (
+    <>
+      <SectionCard
+        title="Query Chat"
+        subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
+        className="h-[78vh]"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+            Read-only workspace. Create query will generate, validate, and optionally run SQL. Follow up gives plain-language guidance and may suggest SQL without running it.
+          </div>
+          <div
+            ref={logRef}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+              shouldStickToBottomRef.current = distanceFromBottom < 120;
+            }}
+            className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1"
+          >
+            <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
+          </div>
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/50 p-4">
+              <textarea
+                value={composerText}
+                onChange={(event) => onComposerTextChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    onSubmit();
+                  }
+                }}
+                placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or what a result means"}
+                spellCheck={false}
+                className="min-h-[90px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
+              />
+              <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-wrap gap-2">
+                  {(["create-query", "follow-up"] as ComposerAction[]).map((action) => (
+                    <button
+                      key={action}
+                      onClick={() => onComposerActionChange(action)}
+                      className={classNames(
+                        "rounded-full border px-3 py-2 text-xs font-medium transition",
+                        composerAction === action
+                          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                          : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                      )}
+                    >
+                      {action === "create-query" ? "Create query" : "Follow up"}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={onSubmit}
+                  disabled={isBusy || composerText.trim().length === 0}
+                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBusy ? (composerAction === "create-query" ? "Working…" : "Thinking…") : composerAction === "create-query" ? "Send create query" : "Send follow up"}
+                </button>
               </div>
-              <button
-                onClick={onSubmit}
-                disabled={isBusy || composerText.trim().length === 0}
-                className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isBusy ? (composerAction === "create-query" ? "Working…" : "Thinking…") : composerAction === "create-query" ? "Send create query" : "Send follow up"}
-              </button>
+              {error ? <div className="mt-3 text-sm text-rose-200">{error}</div> : null}
             </div>
-            {error ? <div className="mt-3 text-sm text-rose-200">{error}</div> : null}
           </div>
         </div>
-      </div>
-    </SectionCard>
-  </>
-);
+      </SectionCard>
+    </>
+  );
+};
 
 type ManualWorkspaceProps = {
   metadataQueryError: boolean;

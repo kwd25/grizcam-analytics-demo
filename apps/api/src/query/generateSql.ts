@@ -18,6 +18,7 @@ Rules:
 - Prefer events for detailed event inspection and recent event listings.
 - Join tables on mac when a join is needed.
 - Avoid SELECT * on events. Always name event columns explicitly.
+- Advanced analytical SQL is allowed, including window functions and ordered-set aggregates, when they fit the question.
 - Keep syntax simple and validator-friendly for a restricted read-only SQL workspace.
 - Use SELECT or WITH only.
 - Avoid schema-qualified references unless the briefing explicitly requires them.
