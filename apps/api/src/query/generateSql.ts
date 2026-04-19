@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { GenerateSqlResponse } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 
 const OPENROUTER_MODEL = "qwen/qwen3-coder-next";
@@ -10,7 +11,6 @@ const SYSTEM_PROMPT = `You generate SQL for the GrizCam analytics app.
 
 Rules:
 - Output PostgreSQL only.
-- Output SQL only. No explanation, no prose, no markdown fences.
 - Generate exactly one read-only statement.
 - Only use the real GrizCam schema and columns from the supplied briefing.
 - Never invent tables, columns, functions, or semantics not present in the briefing.
@@ -24,7 +24,15 @@ Rules:
 - Avoid schema-qualified references unless the briefing explicitly requires them.
 - Avoid ORDER BY aliases if compatibility is uncertain; prefer repeating the expression or ordering by base columns.
 - Prefer explicit LIMIT clauses that stay reasonably small.
-- Never produce write, DDL, transaction, admin, or multi-statement SQL.`;
+- Never produce write, DDL, transaction, admin, or multi-statement SQL.
+- Write explanations in plain language for non-technical users.
+- Keep explanation text polished, brief, and suitable for a general audience.
+- Return JSON only with this shape:
+  {"sql":"string","userIntentSummary":"string","queryExplanation":"string","warning":"optional string"}
+- The sql field must contain the only executable SQL statement.
+- userIntentSummary should briefly restate what the user is asking for.
+- queryExplanation should briefly explain how the query answers that request and why the chosen table(s) fit.
+- Do not wrap the JSON in markdown fences.`;
 
 let briefingCache: string | null = null;
 
@@ -39,6 +47,13 @@ type OpenRouterResponse = {
   choices?: OpenRouterChoice[];
 };
 
+type GeneratedSqlPayload = {
+  sql?: unknown;
+  userIntentSummary?: unknown;
+  queryExplanation?: unknown;
+  warning?: unknown;
+};
+
 export class GenerateSqlError extends Error {
   statusCode: number;
 
@@ -48,6 +63,21 @@ export class GenerateSqlError extends Error {
     this.statusCode = statusCode;
   }
 }
+
+const stripJsonFences = (raw: string) =>
+  raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+const extractJsonObject = (raw: string) => {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return raw.slice(start, end + 1);
+  }
+  return raw;
+};
 
 const getBriefing = async () => {
   if (briefingCache) {
@@ -97,6 +127,39 @@ export const sanitizeGeneratedSql = (raw: string) => {
   return withoutTrailingSemicolon;
 };
 
+const sanitizeExplanation = (value: unknown, fallback: string) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const cleaned = value.replace(/\r\n/g, "\n").trim();
+  return cleaned || fallback;
+};
+
+const coerceGenerateSqlResponse = (raw: string): GenerateSqlResponse => {
+  const cleaned = extractJsonObject(stripJsonFences(raw));
+
+  let parsed: GeneratedSqlPayload;
+  try {
+    parsed = JSON.parse(cleaned) as GeneratedSqlPayload;
+  } catch {
+    throw new GenerateSqlError("The AI helper returned an invalid SQL response payload.", 502);
+  }
+
+  return {
+    sql: sanitizeGeneratedSql(typeof parsed.sql === "string" ? parsed.sql : ""),
+    userIntentSummary: sanitizeExplanation(
+      parsed.userIntentSummary,
+      "This request asks for a read-only query built from the GrizCam dataset."
+    ),
+    queryExplanation: sanitizeExplanation(
+      parsed.queryExplanation,
+      "This query uses the GrizCam schema to answer the request in a read-only way."
+    ),
+    warning: typeof parsed.warning === "string" && parsed.warning.trim() ? parsed.warning.trim() : undefined
+  };
+};
+
 export const generateSqlFromPrompt = async (prompt: string) => {
   if (!appConfig.openRouterApiKey) {
     throw new GenerateSqlError("OPENROUTER_API_KEY is not configured on the server.", 503);
@@ -140,17 +203,17 @@ export const generateSqlFromPrompt = async (prompt: string) => {
   }
 
   const payload = (await response.json()) as OpenRouterResponse;
-  const sql = sanitizeGeneratedSql(extractMessageContent(payload));
+  const result = coerceGenerateSqlResponse(extractMessageContent(payload));
 
   console.log("OpenRouter SQL generation succeeded", {
     model: OPENROUTER_MODEL,
     promptLength: prompt.length,
-    sqlLength: sql.length,
+    sqlLength: result.sql.length,
     durationMs: Date.now() - startedAt
   });
 
   return {
-    sql,
+    ...result,
     model: OPENROUTER_MODEL
   };
 };

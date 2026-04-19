@@ -654,6 +654,8 @@ export type GenerateSqlRequest = {
 
 export type GenerateSqlResponse = {
   sql: string;
+  userIntentSummary: string;
+  queryExplanation: string;
   model?: string;
   warning?: string;
 };

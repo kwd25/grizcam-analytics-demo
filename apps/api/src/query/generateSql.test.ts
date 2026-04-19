@@ -37,7 +37,18 @@ test("generateSqlFromPrompt sanitizes model output", async () => {
   globalThis.fetch = async () =>
     new Response(
       JSON.stringify({
-        choices: [{ message: { content: "```sql\nselect camera_name from dim_devices order by camera_name asc limit 5;\n```" } }]
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                sql: "```sql\nselect camera_name from dim_devices order by camera_name asc limit 5;\n```",
+                userIntentSummary: "You want a short list of cameras.",
+                queryExplanation: "This query reads camera names from the device dimension and keeps the list small.",
+                warning: "Results are limited to five rows."
+              })
+            }
+          }
+        ]
       }),
       {
         status: 200,
@@ -49,6 +60,33 @@ test("generateSqlFromPrompt sanitizes model output", async () => {
     const result = await generateSqlFromPrompt("show cameras");
     assert.equal(result.model, "qwen/qwen3-coder-next");
     assert.equal(result.sql, "select camera_name from dim_devices order by camera_name asc limit 5");
+    assert.equal(result.userIntentSummary, "You want a short list of cameras.");
+    assert.equal(result.queryExplanation, "This query reads camera names from the device dimension and keeps the list small.");
+    assert.equal(result.warning, "Results are limited to five rows.");
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("generateSqlFromPrompt rejects invalid JSON payloads", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "select camera_name from dim_devices limit 5" } }]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+
+  try {
+    await assert.rejects(generateSqlFromPrompt("show cameras"), /invalid SQL response payload/i);
   } finally {
     appConfig.openRouterApiKey = originalKey;
     globalThis.fetch = originalFetch;
