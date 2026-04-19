@@ -865,9 +865,6 @@ const ChatWorkspace = ({
         className="h-[calc(100vh-2.5rem)] min-h-[820px]"
       >
         <div className="flex h-full min-h-0 flex-col">
-          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
-            Read-only workspace. Create query will generate, validate, and optionally run SQL. Follow up gives plain-language guidance and may suggest SQL without running it.
-          </div>
           <div
             ref={logRef}
             onScroll={(event) => {
