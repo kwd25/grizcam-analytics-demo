@@ -82,6 +82,8 @@ Local env behavior:
 
 - If `DATABASE_URL` is set, the API uses it.
 - Otherwise the API falls back to `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD`.
+- Set `OPENROUTER_API_KEY` on the API server to enable the `/query` AI SQL helper.
+- `OPENROUTER_API_KEY` stays server-only and is never exposed to the browser.
 - Leave `VITE_API_BASE_URL` empty for same-origin `/api` calls.
 - Set `VITE_API_BASE_URL=http://localhost:4000` only if you want the frontend to call a separately addressed local API directly instead of using the Vite proxy.
 
@@ -118,6 +120,8 @@ vercel env add ALLOWED_ORIGINS
 vercel env add DEMO_EXPORTS_ENABLED
 vercel env add API_RATE_LIMIT_WINDOW_MS
 vercel env add API_RATE_LIMIT_MAX
+vercel env add OPENROUTER_API_KEY
+vercel env add OPENROUTER_BASE_URL
 vercel env add VITE_API_BASE_URL
 vercel env add VITE_DEMO_EXPORTS_ENABLED
 vercel env add VITE_DEMO_LABEL
@@ -133,6 +137,8 @@ ALLOWED_ORIGINS=https://your-project.vercel.app
 DEMO_EXPORTS_ENABLED=false
 API_RATE_LIMIT_WINDOW_MS=60000
 API_RATE_LIMIT_MAX=120
+OPENROUTER_API_KEY=your_openrouter_server_key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 VITE_API_BASE_URL=
 VITE_DEMO_EXPORTS_ENABLED=false
 VITE_DEMO_LABEL=Synthetic data demo
@@ -165,6 +171,8 @@ Supported variables:
 - `PGUSER`
 - `PGPASSWORD`
 - `ALLOWED_ORIGINS`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL`
 - `VITE_API_BASE_URL`
 - `DEMO_EXPORTS_ENABLED`
 - `NODE_ENV`
@@ -183,6 +191,8 @@ Recommended minimum Vercel set:
 - `DEMO_EXPORTS_ENABLED`
 - `API_RATE_LIMIT_WINDOW_MS`
 - `API_RATE_LIMIT_MAX`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL`
 - `VITE_API_BASE_URL`
 - `VITE_DEMO_EXPORTS_ENABLED`
 - `VITE_DEMO_LABEL`
@@ -203,6 +213,9 @@ Recommended minimum Vercel set:
 - `GET /api/analytics-lab`
 - `GET /api/day/:date/summary`
 - `GET /api/events`
+- `POST /api/query/generate-sql`
+
+The query page also includes a single-turn AI SQL helper. It sends a natural-language request to the backend, the backend calls OpenRouter with the server-side GrizCam schema briefing, then the generated SQL is inserted into the editor and pushed through the existing validator and query runner.
 
 `GET /api/events/export` exists but is disabled by default for the public demo unless `DEMO_EXPORTS_ENABLED=true`.
 

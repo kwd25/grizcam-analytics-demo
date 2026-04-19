@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { Router } from "express";
 import { getQueryMetadata } from "../query/catalog.js";
+import { GenerateSqlError, generateSqlFromPrompt } from "../query/generateSql.js";
 import { exportSafeQueryCsv, runSafeQuery, validateQuerySql } from "../query/service.js";
 
 const queryRequestSchema = z.object({
   sql: z.string().min(1).max(12_000)
+});
+
+const generateSqlRequestSchema = z.object({
+  prompt: z.string().trim().min(1).max(1_000)
 });
 
 const queryExportSchema = queryRequestSchema.extend({
@@ -15,6 +20,21 @@ export const queryRouter = Router();
 
 queryRouter.get("/metadata", (_request, response) => {
   response.json(getQueryMetadata());
+});
+
+queryRouter.post("/generate-sql", async (request, response) => {
+  const { prompt } = generateSqlRequestSchema.parse(request.body);
+
+  try {
+    const result = await generateSqlFromPrompt(prompt);
+    response.json(result);
+  } catch (error) {
+    if (error instanceof GenerateSqlError) {
+      response.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
 });
 
 queryRouter.post("/validate", (request, response) => {
