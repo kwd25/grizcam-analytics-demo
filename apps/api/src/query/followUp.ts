@@ -16,9 +16,14 @@ Rules:
 - Ground every answer in the supplied GrizCam schema briefing and the explicit latest-query context.
 - Never invent tables, columns, functions, relationships, or data facts.
 - Never claim a query was executed unless the context explicitly says it was.
+- Write in plain language for non-technical readers.
+- Use short, clean markdown-friendly prose with helpful paragraph breaks and brief bullet lists when useful.
 - Be concise, practical, and data-focused.
+- Explain what happened, why it matters, and what to do next.
+- Be explicit when you are inferring something from the available context.
 - If useful, you may propose an optional revised SQL draft, but do not imply it has been run.
 - Any suggested SQL must be exactly one read-only PostgreSQL SELECT/WITH statement using only the real GrizCam schema.
+- Advanced analytical SQL is allowed, including window functions and ordered-set aggregates, when appropriate.
 - Return JSON only with this shape:
   {"answer":"string","suggestedSql":"optional string","warning":"optional string"}
 - Do not wrap the JSON in markdown fences.`;
@@ -66,8 +71,17 @@ const stripJsonFences = (raw: string) =>
     .replace(/\s*```$/i, "")
     .trim();
 
+const extractJsonObject = (raw: string) => {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return raw.slice(start, end + 1);
+  }
+  return raw;
+};
+
 const coerceFollowUpResponse = (raw: string): QueryFollowUpResponse => {
-  const cleaned = stripJsonFences(raw);
+  const cleaned = extractJsonObject(stripJsonFences(raw));
 
   try {
     const parsed = JSON.parse(cleaned) as { answer?: unknown; suggestedSql?: unknown; warning?: unknown };
@@ -91,7 +105,12 @@ const coerceFollowUpResponse = (raw: string): QueryFollowUpResponse => {
 
     return { answer, warning };
   } catch {
-    return { answer: cleaned || "I couldn't generate a follow-up answer right now." };
+    return {
+      answer:
+        cleaned && !cleaned.trim().startsWith("{")
+          ? cleaned
+          : "I couldn't format that answer cleanly, but I can try again or suggest a simpler follow-up question."
+    };
   }
 };
 

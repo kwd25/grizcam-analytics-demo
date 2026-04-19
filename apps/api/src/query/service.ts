@@ -302,12 +302,18 @@ const buildValidationFacts = (statement: SelectStatement): ValidationFacts => {
         if (!queryCatalog.allowedFunctions.has(functionName)) {
           pushIssue(state.issues, "FUNCTION_NOT_ALLOWED", `Function "${functionName}" is not allowed in the query workspace.`);
         }
-        if (expr.over || expr.withinGroup) {
-          pushIssue(state.issues, "FUNCTION_NOT_ALLOWED", `Window and within-group syntax is not allowed for "${functionName}".`);
-        }
 
         expr.args.forEach((arg) => validateExpr(arg));
         expr.orderBy?.forEach((entry) => validateExpr(entry.by));
+        if (expr.withinGroup) {
+          validateExpr(expr.withinGroup.by);
+        }
+        if (expr.over?.partitionBy) {
+          expr.over.partitionBy.forEach((entry) => validateExpr(entry));
+        }
+        if (expr.over?.orderBy) {
+          expr.over.orderBy.forEach((entry) => validateExpr(entry.by));
+        }
         if (expr.filter) {
           validateExpr(expr.filter);
         }

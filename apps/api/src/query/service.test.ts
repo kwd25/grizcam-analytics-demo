@@ -147,7 +147,7 @@ test("accepts select star from events", () => {
   assert.deepEqual(result.issues, []);
 });
 
-test("still rejects window functions", () => {
+test("accepts window functions", () => {
   const sql = `
     select
       camera_name,
@@ -157,8 +157,37 @@ test("still rejects window functions", () => {
   `;
 
   const result = validateQuerySql(sql);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test("accepts within group ordered-set aggregates", () => {
+  const sql = `
+    select
+      percentile_cont(0.95) within group (order by unique_event_groups) as p95_events
+    from daily_camera_summary
+    limit 10
+  `;
+
+  const result = validateQuerySql(sql);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test("still rejects recursive ctes", () => {
+  const sql = `
+    with recursive camera_chain as (
+      select mac from dim_devices
+      union all
+      select mac from camera_chain
+    )
+    select * from camera_chain
+    limit 10
+  `;
+
+  const result = validateQuerySql(sql);
   assert.equal(result.ok, false);
-  assert.ok(result.issues.some((issue) => issue.code === "FUNCTION_NOT_ALLOWED"));
+  assert.ok(result.issues.some((issue) => issue.code === "INVALID_QUERY"));
 });
 
 test("still rejects non-read-only sql", () => {
