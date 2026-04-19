@@ -7,6 +7,9 @@ type AppShellProps = PropsWithChildren<{
   subtitle: string;
   badge?: ReactNode;
   aside?: ReactNode;
+  viewportLayout?: boolean;
+  mainClassName?: string;
+  asideClassName?: string;
 }>;
 
 const navItems = [
@@ -17,10 +20,15 @@ const navItems = [
   { to: "/reports", label: "Reports" }
 ];
 
-export const AppShell = ({ title, subtitle, badge, aside, children }: AppShellProps) => (
-  <div className="min-h-screen overflow-x-hidden px-4 py-4 text-slate-100">
-    <div className="mx-auto max-w-[1800px] space-y-4">
-      <header className="rounded-[32px] border border-white/10 bg-white/[0.03] px-5 py-4">
+export const AppShell = ({ title, subtitle, badge, aside, viewportLayout = false, mainClassName, asideClassName, children }: AppShellProps) => (
+  <div
+    className={classNames(
+      "overflow-x-hidden px-4 py-4 text-slate-100",
+      viewportLayout ? "h-[100dvh] overflow-y-hidden" : "min-h-screen"
+    )}
+  >
+    <div className={classNames("mx-auto max-w-[1800px]", viewportLayout ? "flex h-full min-h-0 flex-col gap-4" : "space-y-4")}>
+      <header className="shrink-0 rounded-[32px] border border-white/10 bg-white/[0.03] px-5 py-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
@@ -51,9 +59,9 @@ export const AppShell = ({ title, subtitle, badge, aside, children }: AppShellPr
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <main className="min-w-0 space-y-4">{children}</main>
-        {aside ? <div className="lg:order-2">{aside}</div> : null}
+      <div className={classNames("grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]", viewportLayout ? "min-h-0 flex-1" : "")}>
+        <main className={classNames("min-w-0", viewportLayout ? "min-h-0" : "space-y-4", mainClassName)}>{children}</main>
+        {aside ? <div className={classNames("lg:order-2", viewportLayout ? "min-h-0" : "", asideClassName)}>{aside}</div> : null}
       </div>
     </div>
   </div>
