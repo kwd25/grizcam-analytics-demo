@@ -18,6 +18,7 @@ import { classNames, formatNumber } from "../lib/utils";
 
 const DISALLOWED_SQL = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|comment)\b/i;
 type RequestStatus = "idle" | "validating" | "running" | "success" | "error" | "timeout";
+type AiStatus = "idle" | "generating" | "generated" | "error";
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
 const formatOperatorLabel = (value: string) => value.replace(/_/g, " ");
@@ -158,6 +159,12 @@ const formatCellValue = (value: unknown) => {
   }
   return String(value);
 };
+
+const AI_EXAMPLE_PROMPTS = [
+  "what are the emptiest times of year",
+  "top 10 busiest cameras in last 30 days",
+  "show recent vehicle events"
+];
 
 const applyExample = (metadata: QueryMetadataResponse, id: string): QueryBuilderState | null => {
   const relation = metadata.relations.find((item) => item.name === "daily_camera_summary") ?? metadata.relations[0];
@@ -385,6 +392,87 @@ const CompactExampleRail = ({
   </aside>
 );
 
+const AiCommandBar = ({
+  prompt,
+  onPromptChange,
+  onSubmit,
+  onExample,
+  onRetry,
+  disabled,
+  status,
+  error,
+  canRetry
+}: {
+  prompt: string;
+  onPromptChange: (value: string) => void;
+  onSubmit: () => void;
+  onExample: (value: string) => void;
+  onRetry: () => void;
+  disabled: boolean;
+  status: AiStatus;
+  error: string | null;
+  canRetry: boolean;
+}) => (
+  <div className="space-y-3 rounded-[28px] border border-emerald-400/20 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(15,23,42,0.92))] p-4 shadow-[0_0_40px_rgba(16,185,129,0.08)]">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-200/80">AI Query Assist</div>
+        <div className="mt-1 text-sm text-slate-300">Ask for a query in plain English. Generated SQL stays editable before or after validation.</div>
+      </div>
+      <div className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1 text-[11px] text-slate-300">Single turn</div>
+    </div>
+    <div className="flex flex-col gap-3 md:flex-row">
+      <input
+        value={prompt}
+        onChange={(event) => onPromptChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder="Ask for a query in plain English"
+        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 font-mono text-sm text-slate-100 outline-none transition focus:border-emerald-400"
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={onSubmit}
+          disabled={disabled || prompt.trim().length === 0}
+          className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {status === "generating" ? "Generating…" : "Generate SQL"}
+        </button>
+        {canRetry ? (
+          <button
+            onClick={onRetry}
+            disabled={disabled}
+            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Retry
+          </button>
+        ) : null}
+      </div>
+    </div>
+    <div className="flex flex-wrap gap-2">
+      {AI_EXAMPLE_PROMPTS.map((example) => (
+        <button
+          key={example}
+          onClick={() => onExample(example)}
+          disabled={disabled}
+          className="rounded-full border border-white/10 bg-slate-950/50 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {example}
+        </button>
+      ))}
+    </div>
+    <div className="min-h-[20px] text-xs text-slate-300">
+      {error ? <span className="text-rose-200">{error}</span> : null}
+      {!error && status === "generated" ? <span className="text-emerald-100">SQL generated. The app will validate it before running.</span> : null}
+      {!error && status === "generating" ? <span className="text-emerald-100">Generating SQL from your prompt…</span> : null}
+    </div>
+  </div>
+);
+
 const normalizeRequestIssues = (error: unknown): QueryValidationIssue[] => {
   if (!error) {
     return [];
@@ -503,6 +591,9 @@ export const QueryPage = () => {
     queryKey: ["query-metadata"],
     queryFn: api.queryMetadata
   });
+  const generateSqlMutation = useMutation({
+    mutationFn: (prompt: string) => api.generateQuerySql(prompt)
+  });
   const validateMutation = useMutation({
     mutationFn: (sql: string) => api.validateQuery(sql)
   });
@@ -521,6 +612,11 @@ export const QueryPage = () => {
   const [lastResult, setLastResult] = useState<QueryRunResponse | null>(null);
   const [requestStatus, setRequestStatus] = useState<RequestStatus>("idle");
   const [requestIssues, setRequestIssues] = useState<QueryValidationIssue[]>([]);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiStatus, setAiStatus] = useState<AiStatus>("idle");
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [lastAiPrompt, setLastAiPrompt] = useState("");
+  const [lastGeneratedByAi, setLastGeneratedByAi] = useState(false);
 
   useEffect(() => {
     if (!metadata || builderState) {
@@ -567,6 +663,7 @@ export const QueryPage = () => {
   const aggregateSummary = builderState?.aggregates.length ? `${builderState.aggregates.length} aggregate${builderState.aggregates.length === 1 ? "" : "s"}` : "No aggregates";
   const filterSummary = builderState?.filters.length ? `${builderState.filters.length} filter${builderState.filters.length === 1 ? "" : "s"}` : "No filters";
   const sortSummary = builderState?.sort.length ? `${builderState.sort.length} sort rule${builderState.sort.length === 1 ? "" : "s"}` : "No sorting";
+  const isBusy = requestStatus === "validating" || requestStatus === "running" || generateSqlMutation.isPending;
 
   useEffect(() => {
     if (!generatedSql) {
@@ -603,6 +700,7 @@ export const QueryPage = () => {
       limit: nextRelation.defaultLimit
     });
     setIsCustomSql(false);
+    setLastGeneratedByAi(false);
   };
 
   const updateFilter = (id: string, patch: Partial<QueryBuilderFilter>) => {
@@ -625,49 +723,57 @@ export const QueryPage = () => {
       setBuilderState(nextState);
       setIsCustomSql(false);
       setSql(buildBuilderSql(metadata, nextState));
+      setLastGeneratedByAi(false);
       return;
     }
 
     setSql(fallbackSql);
     setIsCustomSql(true);
+    setLastGeneratedByAi(false);
   };
 
-  const runValidation = async () => {
+  const runValidation = async (nextSql?: string) => {
+    const targetSql = nextSql ?? sql;
     setRequestStatus("validating");
     setRequestIssues([]);
 
     try {
-      const result = await validateMutation.mutateAsync(sql);
+      const result = await validateMutation.mutateAsync(targetSql);
       setLastValidation(result);
       setRequestStatus(result.ok ? "success" : "error");
       if (result.ok && result.normalizedSql) {
         setSql(result.normalizedSql);
       }
+      return result;
     } catch (error) {
       const issues = normalizeRequestIssues(error);
       setLastValidation({ ok: false, issues });
       setRequestIssues(issues);
       setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
+      return { ok: false, issues } satisfies QueryValidationResponse;
     }
   };
 
-  const runQuery = async () => {
+  const runQuery = async (nextSql?: string) => {
+    const targetSql = nextSql ?? sql;
     setRequestStatus("running");
     setRequestIssues([]);
 
     try {
-      const result = await runMutation.mutateAsync(sql);
+      const result = await runMutation.mutateAsync(targetSql);
       setLastResult(result);
       setLastValidation(result);
       setRequestStatus(result.ok ? "success" : result.issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
       if (result.normalizedSql) {
         setSql(result.normalizedSql);
       }
+      return result;
     } catch (error) {
       const issues = normalizeRequestIssues(error);
       setLastValidation({ ok: false, issues });
       setRequestIssues(issues);
       setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
+      return { ok: false, issues } as QueryRunResponse;
     }
   };
 
@@ -681,6 +787,50 @@ export const QueryPage = () => {
       const issues = normalizeRequestIssues(error);
       setRequestIssues(issues);
       setRequestStatus(issues.some((issue) => issue.code === "QUERY_TIMEOUT") ? "timeout" : "error");
+    }
+  };
+
+  const submitAiPrompt = async (promptOverride?: string) => {
+    const prompt = (promptOverride ?? aiPrompt).trim();
+    if (!prompt) {
+      setAiError("Enter a question to generate SQL.");
+      setAiStatus("error");
+      return;
+    }
+
+    setAiPrompt(prompt);
+    setAiError(null);
+    setAiStatus("generating");
+    setLastAiPrompt(prompt);
+    setRequestIssues([]);
+
+    try {
+      const result = await generateSqlMutation.mutateAsync(prompt);
+      const issues = frontendLint(result.sql);
+      if (issues.length > 0) {
+        setAiStatus("error");
+        setAiError(issues[0]?.message ?? "The AI helper returned invalid SQL.");
+        setLastValidation({ ok: false, issues });
+        setRequestIssues(issues);
+        return;
+      }
+
+      setSql(result.sql);
+      setIsCustomSql(true);
+      setLastGeneratedByAi(true);
+      setAiStatus("generated");
+      const validation = await runValidation(result.sql);
+      if (validation.ok) {
+        await runQuery(validation.normalizedSql ?? result.sql);
+      } else {
+        setAiStatus("error");
+        setAiError("Generated SQL did not pass validation. Review the validator feedback below.");
+      }
+    } catch (error) {
+      const message =
+        error instanceof QueryRequestError ? error.message : error instanceof Error ? error.message : "The AI helper failed unexpectedly.";
+      setAiStatus("error");
+      setAiError(message);
     }
   };
 
@@ -717,6 +867,32 @@ export const QueryPage = () => {
             "The backend validates every query before execution. Comments, write statements, unsafe relations, and oversized limits are blocked server-side."}
         </p>
         {metadataQuery.isError ? <div className="mt-4"><QueryIssues issues={metadataIssues} /></div> : null}
+      </SectionCard>
+
+      <SectionCard
+        title="AI Query Assist"
+        subtitle="Turn a plain-English question into SQL, then let the existing validator and runner handle the rest."
+      >
+        <AiCommandBar
+          prompt={aiPrompt}
+          onPromptChange={(value) => {
+            setAiPrompt(value);
+            if (aiStatus === "error") {
+              setAiError(null);
+              setAiStatus("idle");
+            }
+          }}
+          onSubmit={() => void submitAiPrompt()}
+          onExample={(value) => {
+            setAiPrompt(value);
+            void submitAiPrompt(value);
+          }}
+          onRetry={() => void submitAiPrompt(lastAiPrompt)}
+          disabled={isBusy}
+          status={aiStatus}
+          error={aiError}
+          canRetry={lastAiPrompt.trim().length > 0}
+        />
       </SectionCard>
 
       <div className="grid gap-4">
@@ -1138,6 +1314,9 @@ export const QueryPage = () => {
           subtitle="Write or edit a query, validate it, and run it when it looks right."
           actions={
             <div className="flex flex-wrap gap-2">
+              {lastGeneratedByAi ? (
+                <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs text-sky-100">Generated by AI</span>
+              ) : null}
               <span
                 className={classNames(
                   "rounded-full border px-3 py-1 text-xs",
@@ -1150,6 +1329,7 @@ export const QueryPage = () => {
                 onClick={() => {
                   setIsCustomSql(false);
                   setSql(generatedSql);
+                  setLastGeneratedByAi(false);
                 }}
                 disabled={!generatedSql}
                 className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1169,21 +1349,25 @@ export const QueryPage = () => {
                 const nextValue = event.target.value;
                 setSql(nextValue);
                 setIsCustomSql(nextValue !== generatedSql);
+                if (lastGeneratedByAi && nextValue !== generatedSql) {
+                  setLastGeneratedByAi(true);
+                }
               }}
               spellCheck={false}
               className="min-h-[320px] w-full rounded-3xl border border-white/10 bg-slate-950/75 px-4 py-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-emerald-400"
             />
+            <div className="text-xs text-slate-400">Generated SQL stays editable. You can inspect and tweak it before or after validation.</div>
             <div className="flex flex-wrap gap-3">
               <button
-                onClick={runValidation}
-                disabled={requestStatus === "validating" || requestStatus === "running" || sql.trim().length === 0}
+                onClick={() => void runValidation()}
+                disabled={isBusy || sql.trim().length === 0}
                 className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {requestStatus === "validating" ? "Validating…" : "Validate query"}
               </button>
               <button
-                onClick={runQuery}
-                disabled={!canRun || requestStatus === "running" || requestStatus === "validating"}
+                onClick={() => void runQuery()}
+                disabled={!canRun || isBusy}
                 className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {requestStatus === "running" ? "Running…" : "Run query"}

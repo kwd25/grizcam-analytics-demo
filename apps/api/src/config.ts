@@ -41,6 +41,8 @@ export const appConfig = {
   isProduction,
   port: parseNumber(process.env.PORT, 4000),
   allowedOrigins,
+  openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
+  openRouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
   apiRateLimit: {
     windowMs: parseNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 60_000),
     max: parseNumber(process.env.API_RATE_LIMIT_MAX, 120)
