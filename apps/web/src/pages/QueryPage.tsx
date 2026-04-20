@@ -635,10 +635,10 @@ const ModeSidebar = ({
   onPromptExample: (prompt: string) => void;
   latestQuery: QueryLatestContext | undefined;
 }) => (
-  <aside className="panel h-full rounded-[28px] p-4 overflow-auto">
-    <div className="mb-4">
-      <h2 className="text-xl font-semibold text-white">Query Workspace</h2>
-      <p className="mt-1 text-sm text-slate-400">Chat is the primary experience. Switch to Manual when you want the full builder and raw editor controls.</p>
+  <aside className="panel h-full rounded-[28px] p-3 overflow-auto">
+    <div className="mb-3">
+      <h2 className="text-lg font-semibold text-white">Query Workspace</h2>
+      <p className="mt-1 text-xs leading-5 text-slate-400">Chat is the primary experience. Switch to Manual when you want the full builder and raw editor controls.</p>
     </div>
     <div className="space-y-2">
       {(["chat", "manual"] as ViewMode[]).map((mode) => (
@@ -646,7 +646,7 @@ const ModeSidebar = ({
           key={mode}
           onClick={() => onSelectMode(mode)}
           className={classNames(
-            "w-full rounded-2xl border px-4 py-3 text-left transition",
+            "w-full rounded-2xl border px-3 py-2.5 text-left transition",
             viewMode === mode
               ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
               : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
@@ -660,14 +660,14 @@ const ModeSidebar = ({
       ))}
     </div>
 
-    <div className="mt-6">
+    <div className="mt-5">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Example prompts</div>
-      <div className="mt-3 space-y-2">
+      <div className="mt-2.5 space-y-2">
         {AI_EXAMPLE_PROMPTS.map((prompt) => (
           <button
             key={prompt}
             onClick={() => onPromptExample(prompt)}
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-3 text-left text-sm text-slate-200 transition hover:bg-white/10"
+            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/10"
           >
             {prompt}
           </button>
@@ -675,14 +675,14 @@ const ModeSidebar = ({
       </div>
     </div>
 
-    <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+    <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-3">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest query context</div>
       {latestQuery?.sql ? (
-        <div className="mt-3 space-y-2 text-sm text-slate-300">
+        <div className="mt-2.5 space-y-2 text-sm text-slate-300">
           <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200">
             Validation: {latestQuery.validation?.ok ? "passed" : "not yet valid"}
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
+          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs leading-5 text-slate-400">
             {latestQuery.result?.rowCount !== undefined
               ? `${formatNumber(latestQuery.result.rowCount, 0)} rows • ${formatNumber(latestQuery.result.durationMs ?? 0, 0)} ms`
               : "No executed result yet"}
@@ -876,8 +876,8 @@ const ChatWorkspace = ({
           >
             <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
           </div>
-          <div className="mt-3 shrink-0 border-t border-white/10 pt-3">
-            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-3 shadow-[0_-18px_48px_rgba(2,6,23,0.24)]">
+          <div className="mt-2 shrink-0 border-t border-white/10 pt-2.5">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-2.5 shadow-[0_-18px_48px_rgba(2,6,23,0.24)]">
               <textarea
                 value={composerText}
                 onChange={(event) => onComposerTextChange(event.target.value)}
@@ -889,7 +889,8 @@ const ChatWorkspace = ({
                 }}
                 placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or what a result means"}
                 spellCheck={false}
-                className="min-h-[88px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400 md:min-h-[96px]"
+                rows={2}
+                className="max-h-24 min-h-[56px] w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm leading-6 text-slate-100 outline-none transition focus:border-emerald-400"
               />
               <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap gap-2">
