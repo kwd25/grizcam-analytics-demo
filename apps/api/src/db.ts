@@ -8,7 +8,7 @@ declare global {
   var __grizcamReportsPool: Pool | undefined;
 }
 
-const buildPool = (connection: Parameters<typeof Pool>[0]) =>
+const buildPool = (connection: ConstructorParameters<typeof Pool>[0]) =>
   new Pool({
     ...connection,
     max: appConfig.isProduction ? 5 : 10,
