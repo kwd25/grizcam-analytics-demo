@@ -876,8 +876,8 @@ const ChatWorkspace = ({
           >
             <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
           </div>
-          <div className="mt-4 shrink-0 border-t border-white/10 pt-5">
-            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-4 shadow-[0_-18px_48px_rgba(2,6,23,0.24)]">
+          <div className="mt-3 shrink-0 border-t border-white/10 pt-3">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-3 shadow-[0_-18px_48px_rgba(2,6,23,0.24)]">
               <textarea
                 value={composerText}
                 onChange={(event) => onComposerTextChange(event.target.value)}
@@ -889,16 +889,16 @@ const ChatWorkspace = ({
                 }}
                 placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or what a result means"}
                 spellCheck={false}
-                className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400"
+                className="min-h-[88px] w-full resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-emerald-400 md:min-h-[96px]"
               />
-              <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap gap-2">
                   {(["create-query", "follow-up"] as ComposerAction[]).map((action) => (
                     <button
                       key={action}
                       onClick={() => onComposerActionChange(action)}
                       className={classNames(
-                        "rounded-full border px-3 py-2 text-xs font-medium transition",
+                        "rounded-full border px-3 py-2 text-xs font-medium leading-none transition",
                         composerAction === action
                           ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
                           : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
@@ -911,7 +911,7 @@ const ChatWorkspace = ({
                 <button
                   onClick={onSubmit}
                   disabled={isBusy || composerText.trim().length === 0}
-                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isBusy ? (composerAction === "create-query" ? "Working…" : "Thinking…") : composerAction === "create-query" ? "Send create query" : "Send follow up"}
                 </button>

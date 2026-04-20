@@ -32,11 +32,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           }
         >
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
+            <Route path="/" element={<QueryPage />} />
+            <Route path="/overview" element={<DashboardPage />} />
             <Route path="/ops" element={<OpsPage />} />
             <Route path="/advanced" element={<AdvancedPage />} />
             <Route path="/analytics-lab" element={<Navigate to="/advanced" replace />} />
-            <Route path="/query" element={<QueryPage />} />
+            <Route path="/query" element={<Navigate to="/" replace />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
