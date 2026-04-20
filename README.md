@@ -31,6 +31,7 @@ synthetic/
 - Camera multi-select, date range, time-of-day, subject, and telemetry filters
 - Operational overview dashboard with KPI, camera health, pipeline, telemetry, and notable-event sections
 - Analytics Lab page for anomaly analysis, forecasting baselines, clustering-style camera groupings, and data-quality/model-readiness checks
+- Reports page for cached natural-language operational briefings generated from existing analytics aggregates
 - Daily trend, day drilldown, event explorer, and reusable chart/card components across both pages
 - Clickable day drilldown panel
 - Server-side event explorer with sorting, pagination, debounced text search, and row expansion
@@ -82,8 +83,10 @@ Local env behavior:
 
 - If `DATABASE_URL` is set, the API uses it.
 - Otherwise the API falls back to `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD`.
-- Set `OPENROUTER_API_KEY` on the API server to enable the `/query` AI SQL helper.
+- Set `OPENROUTER_API_KEY` on the API server to enable the `/query` AI SQL helper and the Reports briefing generator.
 - `OPENROUTER_API_KEY` stays server-only and is never exposed to the browser.
+- `OPENROUTER_MODEL` defaults to `anthropic/claude-sonnet-4.6` for Reports and can be swapped later without code changes.
+- `REPORT_PROMPT_VERSION` lets you invalidate cached reports when the prompt contract changes.
 - Leave `VITE_API_BASE_URL` empty for same-origin `/api` calls.
 - Set `VITE_API_BASE_URL=http://localhost:4000` only if you want the frontend to call a separately addressed local API directly instead of using the Vite proxy.
 
@@ -122,6 +125,8 @@ vercel env add API_RATE_LIMIT_WINDOW_MS
 vercel env add API_RATE_LIMIT_MAX
 vercel env add OPENROUTER_API_KEY
 vercel env add OPENROUTER_BASE_URL
+vercel env add OPENROUTER_MODEL
+vercel env add REPORT_PROMPT_VERSION
 vercel env add VITE_API_BASE_URL
 vercel env add VITE_DEMO_EXPORTS_ENABLED
 vercel env add VITE_DEMO_LABEL
@@ -139,6 +144,8 @@ API_RATE_LIMIT_WINDOW_MS=60000
 API_RATE_LIMIT_MAX=120
 OPENROUTER_API_KEY=your_openrouter_server_key
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=anthropic/claude-sonnet-4.6
+REPORT_PROMPT_VERSION=v1
 VITE_API_BASE_URL=
 VITE_DEMO_EXPORTS_ENABLED=false
 VITE_DEMO_LABEL=Synthetic data demo
@@ -173,6 +180,8 @@ Supported variables:
 - `ALLOWED_ORIGINS`
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_BASE_URL`
+- `OPENROUTER_MODEL`
+- `REPORT_PROMPT_VERSION`
 - `VITE_API_BASE_URL`
 - `DEMO_EXPORTS_ENABLED`
 - `NODE_ENV`
@@ -193,6 +202,8 @@ Recommended minimum Vercel set:
 - `API_RATE_LIMIT_MAX`
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_BASE_URL`
+- `OPENROUTER_MODEL`
+- `REPORT_PROMPT_VERSION`
 - `VITE_API_BASE_URL`
 - `VITE_DEMO_EXPORTS_ENABLED`
 - `VITE_DEMO_LABEL`
@@ -214,10 +225,21 @@ Recommended minimum Vercel set:
 - `GET /api/day/:date/summary`
 - `GET /api/events`
 - `POST /api/query/generate-sql`
+- `GET /api/reports/latest`
+- `GET /api/reports/status`
+- `POST /api/reports/generate`
 
 The query page also includes a single-turn AI SQL helper. It sends a natural-language request to the backend, the backend calls OpenRouter with the server-side GrizCam schema briefing, then the generated SQL is inserted into the editor and pushed through the existing validator and query runner.
 
 `GET /api/events/export` exists but is disabled by default for the public demo unless `DEMO_EXPORTS_ENABLED=true`.
+
+## Reports Briefing Cache
+
+- Report generation reuses the existing `overview` and `analytics-lab` aggregates instead of shipping raw events to the model.
+- The backend builds a compact snapshot, hashes `snapshot + REPORT_PROMPT_VERSION + OPENROUTER_MODEL`, and caches the generated JSON briefing in Postgres.
+- Exact hash matches reuse the cached report immediately.
+- If the current filter key has an older ready report while a new snapshot is regenerating, the UI shows that stale report with a refresh indicator.
+- The reports table is created automatically on API startup, and the matching SQL migration is included at [`/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql`](/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql).
 
 All chart and event endpoints accept the dashboard filter params:
 

@@ -523,6 +523,141 @@ export type AnalyticsLabResponse = {
   dataQuality: DataQualityResponse;
 };
 
+export const reportConfidenceSchema = z.enum(["low", "medium", "high"]);
+export type ReportConfidence = z.infer<typeof reportConfidenceSchema>;
+
+export const operationalReportFindingSchema = z.object({
+  title: z.string().trim().min(1).max(240),
+  evidence: z.array(z.string().trim().min(1).max(320)).min(1).max(3),
+  confidence: reportConfidenceSchema,
+  actionability: z.string().trim().min(1).max(320)
+});
+export type OperationalReportFinding = z.infer<typeof operationalReportFindingSchema>;
+
+export const operationalReportActionSchema = z.object({
+  priority: z.number().int().min(1).max(5),
+  action: z.string().trim().min(1).max(240),
+  why: z.string().trim().min(1).max(320)
+});
+export type OperationalReportAction = z.infer<typeof operationalReportActionSchema>;
+
+export const operationalReportRiskSchema = z.object({
+  title: z.string().trim().min(1).max(240),
+  impact: z.string().trim().min(1).max(320),
+  suggested_followup: z.string().trim().min(1).max(320)
+});
+export type OperationalReportRisk = z.infer<typeof operationalReportRiskSchema>;
+
+export const operationalReportSchema = z.object({
+  headline: z.string().trim().min(1).max(240),
+  executive_summary: z.array(z.string().trim().min(1).max(320)).min(2).max(4),
+  key_findings: z.array(operationalReportFindingSchema).min(2).max(6),
+  recommended_actions: z.array(operationalReportActionSchema).min(1).max(5),
+  risks_or_watchouts: z.array(operationalReportRiskSchema).min(0).max(5),
+  open_questions: z.array(z.string().trim().min(1).max(240)).min(0).max(5)
+});
+export type OperationalReport = z.infer<typeof operationalReportSchema>;
+
+export const reportJobStatusSchema = z.enum(["queued", "generating", "ready", "error"]);
+export type ReportJobStatus = z.infer<typeof reportJobStatusSchema>;
+
+export const reportViewStatusSchema = z.enum(["generating", "ready", "stale", "error"]);
+export type ReportViewStatus = z.infer<typeof reportViewStatusSchema>;
+
+export const reportSnapshotTrendSchema = z.object({
+  label: z.string(),
+  direction: z.enum(["up", "down", "flat", "mixed"]),
+  deltaPct: z.number().nullable(),
+  note: z.string()
+});
+export type ReportSnapshotTrend = z.infer<typeof reportSnapshotTrendSchema>;
+
+export const reportSnapshotMetricSchema = z.object({
+  label: z.string(),
+  value: z.number().nullable(),
+  unit: z.string().optional(),
+  note: z.string().optional()
+});
+export type ReportSnapshotMetric = z.infer<typeof reportSnapshotMetricSchema>;
+
+export const reportSnapshotItemSchema = z.object({
+  name: z.string(),
+  value: z.number().nullable().optional(),
+  detail: z.string(),
+  status: z.string().optional()
+});
+export type ReportSnapshotItem = z.infer<typeof reportSnapshotItemSchema>;
+
+export const reportSnapshotSummarySchema = z.object({
+  filterKey: z.string(),
+  filters: dashboardFiltersSchema,
+  dateRange: z.object({
+    startDate: z.string(),
+    endDate: z.string()
+  }),
+  overviewMetrics: z.array(reportSnapshotMetricSchema).max(12),
+  pipeline: z.array(reportSnapshotMetricSchema).max(8),
+  topCameras: z.array(reportSnapshotItemSchema).max(6),
+  atRiskCameras: z.array(reportSnapshotItemSchema).max(6),
+  notableShifts: z.array(reportSnapshotItemSchema).max(6),
+  anomalies: z.array(reportSnapshotItemSchema).max(6),
+  trends: z.array(reportSnapshotTrendSchema).max(8),
+  dataQualityCaveats: z.array(z.string()).max(8),
+  narrativeContext: z.array(z.string()).max(8)
+});
+export type ReportSnapshotSummary = z.infer<typeof reportSnapshotSummarySchema>;
+
+export const reportRecordSchema = z.object({
+  id: z.string().min(1),
+  normalizedFilterKey: z.string().min(1),
+  snapshotHash: z.string().min(1),
+  promptVersion: z.string().min(1),
+  model: z.string().min(1),
+  jobStatus: reportJobStatusSchema,
+  viewStatus: reportViewStatusSchema,
+  isRefreshing: z.boolean().default(false),
+  isExactMatch: z.boolean().default(false),
+  generatedAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+  startedAt: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  report: operationalReportSchema.nullable().optional(),
+  snapshot: reportSnapshotSummarySchema.nullable().optional()
+});
+export type ReportRecord = z.infer<typeof reportRecordSchema>;
+
+export const getReportResponseSchema = z.object({
+  status: reportViewStatusSchema,
+  cacheKey: z.string(),
+  latest: reportRecordSchema.nullable(),
+  stale: reportRecordSchema.nullable().optional()
+});
+export type GetReportResponse = z.infer<typeof getReportResponseSchema>;
+
+export const triggerReportRequestSchema = z.object({
+  filters: dashboardFiltersSchema,
+  force: z.boolean().optional().default(false)
+});
+export type TriggerReportRequest = z.infer<typeof triggerReportRequestSchema>;
+
+export const triggerReportResponseSchema = z.object({
+  status: reportJobStatusSchema,
+  cacheKey: z.string(),
+  reportId: z.string(),
+  isExactMatch: z.boolean(),
+  report: reportRecordSchema.nullable().optional()
+});
+export type TriggerReportResponse = z.infer<typeof triggerReportResponseSchema>;
+
+export const reportStatusResponseSchema = z.object({
+  status: reportViewStatusSchema,
+  cacheKey: z.string(),
+  current: reportRecordSchema.nullable(),
+  stale: reportRecordSchema.nullable().optional()
+});
+export type ReportStatusResponse = z.infer<typeof reportStatusResponseSchema>;
+
 export type QueryColumnType = "text" | "number" | "date" | "timestamp" | "boolean" | "json";
 
 export type QueryOperator =
