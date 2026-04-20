@@ -11,8 +11,16 @@ type OpenRouterResponse = {
   choices?: OpenRouterChoice[];
 };
 
+export type ReportGenerationResult = {
+  report: OperationalReport;
+  timingMs: {
+    modelRequest: number;
+    validation: number;
+  };
+};
+
 type ReportModelClient = {
-  generateReport: (snapshot: ReportSnapshotSummary) => Promise<OperationalReport>;
+  generateReport: (snapshot: ReportSnapshotSummary) => Promise<ReportGenerationResult>;
 };
 
 const SYSTEM_PROMPT = `You are generating an operations briefing for GrizCam analytics.
@@ -132,15 +140,28 @@ const callOpenRouter = async (messages: Array<{ role: "system" | "user"; content
 
 export const createOpenRouterReportClient = (): ReportModelClient => ({
   async generateReport(snapshot) {
+    const timingMs = {
+      modelRequest: 0,
+      validation: 0
+    };
     const userPrompt = `Generate the operational briefing from this analytics snapshot.\n\n${JSON.stringify(snapshot, null, 2)}`;
+
+    const firstModelStartedAt = Date.now();
     const raw = await callOpenRouter([
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: userPrompt }
     ]);
+    timingMs.modelRequest += Date.now() - firstModelStartedAt;
 
+    const firstValidationStartedAt = Date.now();
     try {
-      return parseReport(raw);
+      const report = parseReport(raw);
+      timingMs.validation += Date.now() - firstValidationStartedAt;
+      return { report, timingMs };
     } catch (error) {
+      timingMs.validation += Date.now() - firstValidationStartedAt;
+
+      const repairModelStartedAt = Date.now();
       const repaired = await callOpenRouter([
         { role: "system", content: REPAIR_PROMPT },
         {
@@ -148,10 +169,15 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
           content: `Snapshot:\n${JSON.stringify(snapshot, null, 2)}\n\nOriginal response:\n${raw}`
         }
       ]);
+      timingMs.modelRequest += Date.now() - repairModelStartedAt;
 
+      const repairValidationStartedAt = Date.now();
       try {
-        return parseReport(repaired);
+        const report = parseReport(repaired);
+        timingMs.validation += Date.now() - repairValidationStartedAt;
+        return { report, timingMs };
       } catch {
+        timingMs.validation += Date.now() - repairValidationStartedAt;
         const message = error instanceof Error ? error.message : "The report response was invalid.";
         throw new Error(`The report model returned invalid JSON after repair. ${message}`);
       }

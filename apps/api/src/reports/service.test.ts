@@ -83,7 +83,9 @@ const makeRow = (overrides: Partial<StoredReportRow> = {}): StoredReportRow => (
   snapshotHash: "hash-1",
   promptVersion: "v1",
   model: "anthropic/claude-sonnet-4.6",
+  filters,
   jobStatus: "ready",
+  phase: "ready",
   generatedAt: "2025-01-31T12:00:00.000Z",
   updatedAt: "2025-01-31T12:00:00.000Z",
   startedAt: "2025-01-31T11:59:00.000Z",
@@ -91,6 +93,7 @@ const makeRow = (overrides: Partial<StoredReportRow> = {}): StoredReportRow => (
   error: null,
   report: validReport,
   snapshot,
+  debug: { lastErrorCode: null, lastErrorMessage: null, timingMs: { total: 1000 } },
   ...overrides
 });
 
@@ -237,20 +240,21 @@ test("hashReportSnapshot is stable for equivalent snapshots", () => {
   assert.equal(hashA, hashB);
 });
 
-test("selectLatestReportView prefers exact ready cache hit", () => {
-  const exact = makeRow();
-  const view = selectLatestReportView({ exact, latestByFilter: exact, staleReady: null });
+test("selectLatestReportView prefers latest ready report", () => {
+  const latest = makeRow();
+  const view = selectLatestReportView({ latestByFilter: latest, staleReady: null });
   assert.equal(view.status, "ready");
-  assert.equal(view.latest?.isExactMatch, true);
+  assert.equal(view.latest?.phase, "ready");
 });
 
-test("selectLatestReportView returns stale content while exact report refreshes", () => {
-  const generating = makeRow({ id: "refreshing", jobStatus: "generating", report: null });
+test("selectLatestReportView returns stale content while a newer job refreshes", () => {
+  const generating = makeRow({ id: "refreshing", jobStatus: "generating", phase: "calling_model", report: null });
   const staleReady = makeRow({ id: "stale-ready" });
-  const view = selectLatestReportView({ exact: generating, latestByFilter: generating, staleReady });
+  const view = selectLatestReportView({ latestByFilter: generating, staleReady });
   assert.equal(view.status, "stale");
   assert.equal(view.stale?.id, "stale-ready");
   assert.equal(view.latest?.isRefreshing, true);
+  assert.equal(view.phase, "calling_model");
 });
 
 test("report client repairs malformed JSON once", async () => {
@@ -276,7 +280,8 @@ test("report client repairs malformed JSON once", async () => {
   try {
     const client = createOpenRouterReportClient();
     const result = await client.generateReport(snapshot);
-    assert.equal(result.headline, validReport.headline);
+    assert.equal(result.report.headline, validReport.headline);
+    assert.ok(result.timingMs.modelRequest >= 0);
     assert.equal(calls, 2);
   } finally {
     appConfig.openRouterApiKey = originalKey;

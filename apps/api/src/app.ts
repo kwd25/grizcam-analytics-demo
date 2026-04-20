@@ -4,7 +4,6 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ZodError } from "zod";
 import { appConfig } from "./config.js";
-import { ensureReportsTable } from "./reports/storage.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { queryRouter } from "./routes/query.js";
 import { reportsRouter } from "./routes/reports.js";
@@ -74,10 +73,6 @@ export const createApp = () => {
 
   return app;
 };
-
-void ensureReportsTable().catch((error) => {
-  console.error("Failed to ensure analytics_reports table", error);
-});
 
 const app = createApp();
 
