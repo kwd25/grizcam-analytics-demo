@@ -17,6 +17,9 @@ import type {
   QueryMetadataResponse,
   QueryExportFormat,
   QueryRunResponse,
+  GetReportResponse,
+  ReportStatusResponse,
+  TriggerReportResponse,
   SubjectCameraHeatmapPoint,
   TimeOfDayCompositionPoint,
   QueryValidationResponse
@@ -123,6 +126,44 @@ const postQueryJson = async <T>(path: string, body: unknown): Promise<T> => {
   }
 };
 
+const postJson = async <T>(path: string, body: unknown): Promise<T> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), QUERY_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const message =
+        payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
+          ? (payload as { error: string }).error
+          : `Request failed: ${response.status}`;
+      throw new QueryRequestError("INVALID_RESPONSE", message);
+    }
+
+    return payload as T;
+  } catch (error) {
+    if (error instanceof QueryRequestError) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new QueryRequestError("TIMEOUT", "The request took longer than 10 seconds and was stopped.");
+    }
+    throw new QueryRequestError("NETWORK", "The service is unreachable right now. Please retry in a moment.");
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
 const postQueryDownload = async (path: string, body: unknown): Promise<Blob> => {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), QUERY_REQUEST_TIMEOUT_MS);
@@ -176,6 +217,10 @@ export const api = {
   analyticsLab: (filters: DashboardFilters) => fetchJson<AnalyticsLabResponse>("/api/analytics-lab", filters),
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),
+  latestReport: (filters: DashboardFilters) => fetchJson<GetReportResponse>("/api/reports/latest", filters),
+  reportStatus: (filters: DashboardFilters) => fetchJson<ReportStatusResponse>("/api/reports/status", filters),
+  triggerReportGeneration: (filters: DashboardFilters, force = false) =>
+    postJson<TriggerReportResponse>("/api/reports/generate", { filters, force }),
   queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
   generateQuerySql: (prompt: string) => postQueryJson<GenerateSqlResponse>("/api/query/generate-sql", { prompt }),
   queryFollowUp: (body: QueryFollowUpRequest) => postQueryJson<QueryFollowUpResponse>("/api/query/follow-up", body),

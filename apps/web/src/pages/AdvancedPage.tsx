@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import { classNames, formatNumber, formatSignedNumber, titleCase } from "../lib/utils";
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
+import { useReportPrefetch } from "../hooks/useReportPrefetch";
 
 const QueryState = ({ error }: { error?: Error | null }) => (
   <div className="panel rounded-3xl border border-white/8 bg-white/[0.03] px-4 py-10 text-center">
@@ -59,6 +60,7 @@ const residualCellClass = (value: number) => {
 
 export const AdvancedPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
+  useReportPrefetch(filters);
   const stableFilters = useMemo(() => filters, [filters]);
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
   const analyticsQuery = useQuery({ queryKey: ["analytics-lab", stableFilters], queryFn: () => api.analyticsLab(stableFilters) });

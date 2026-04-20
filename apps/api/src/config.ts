@@ -43,6 +43,8 @@ export const appConfig = {
   allowedOrigins,
   openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
   openRouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+  openRouterModel: process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4.6",
+  reportPromptVersion: process.env.REPORT_PROMPT_VERSION ?? "v1",
   apiRateLimit: {
     windowMs: parseNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 60_000),
     max: parseNumber(process.env.API_RATE_LIMIT_MAX, 120)

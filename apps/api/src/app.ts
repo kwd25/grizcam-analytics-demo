@@ -4,8 +4,10 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ZodError } from "zod";
 import { appConfig } from "./config.js";
+import { ensureReportsTable } from "./reports/storage.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { queryRouter } from "./routes/query.js";
+import { reportsRouter } from "./routes/reports.js";
 
 const buildCorsOrigin = () => {
   if (!appConfig.isProduction) {
@@ -52,6 +54,7 @@ export const createApp = () => {
   app.use(express.json({ limit: "100kb" }));
 
   app.use("/api", dashboardRouter);
+  app.use("/api/reports", reportsRouter);
   app.use("/api/query", queryRouter);
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
@@ -71,6 +74,10 @@ export const createApp = () => {
 
   return app;
 };
+
+void ensureReportsTable().catch((error) => {
+  console.error("Failed to ensure analytics_reports table", error);
+});
 
 const app = createApp();
 

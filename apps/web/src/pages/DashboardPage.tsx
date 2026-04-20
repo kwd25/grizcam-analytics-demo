@@ -14,6 +14,7 @@ import { TimeOfDayChart } from "../components/charts/TimeOfDayChart";
 import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
+import { useReportPrefetch } from "../hooks/useReportPrefetch";
 
 const QueryState = ({ error }: { error?: Error | null }) => (
   <div className="panel rounded-3xl border border-white/8 bg-white/[0.03] px-4 py-10 text-center">
@@ -26,6 +27,7 @@ const QueryState = ({ error }: { error?: Error | null }) => (
 
 export const DashboardPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
+  useReportPrefetch(filters);
   const [selectedDate, setSelectedDate] = useState<string>();
   const [eventQuery, setEventQuery] = useState<EventQuery>({
     ...defaultDashboardFilters,
