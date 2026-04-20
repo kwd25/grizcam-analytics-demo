@@ -5,17 +5,18 @@ type SectionCardProps = PropsWithChildren<{
   subtitle?: string;
   actions?: ReactNode;
   className?: string;
+  contentClassName?: string;
 }>;
 
-export const SectionCard = ({ title, subtitle, actions, className, children }: SectionCardProps) => (
-  <section className={`panel rounded-3xl p-5 ${className ?? ""}`}>
-    <div className="mb-4 flex items-start justify-between gap-4">
+export const SectionCard = ({ title, subtitle, actions, className, contentClassName, children }: SectionCardProps) => (
+  <section className={`panel flex min-h-0 flex-col rounded-3xl p-5 ${className ?? ""}`}>
+    <div className="mb-4 flex shrink-0 items-start justify-between gap-4">
       <div>
         <h2 className="text-base font-semibold tracking-wide text-white">{title}</h2>
         {subtitle ? <p className="mt-1 text-sm text-slate-400">{subtitle}</p> : null}
       </div>
       {actions ? <div className="shrink-0">{actions}</div> : null}
     </div>
-    {children}
+    <div className={`min-h-0 flex-1 ${contentClassName ?? ""}`}>{children}</div>
   </section>
 );
