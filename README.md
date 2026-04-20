@@ -87,6 +87,7 @@ Local env behavior:
 - `OPENROUTER_API_KEY` stays server-only and is never exposed to the browser.
 - `OPENROUTER_MODEL` defaults to `anthropic/claude-sonnet-4.6` for Reports and can be swapped later without code changes.
 - `REPORT_PROMPT_VERSION` lets you invalidate cached reports when the prompt contract changes.
+- Set `REPORTS_DATABASE_URL` to a writable Postgres database for report jobs/cache. If it is not set, Reports stays disabled instead of failing the whole API.
 - Leave `VITE_API_BASE_URL` empty for same-origin `/api` calls.
 - Set `VITE_API_BASE_URL=http://localhost:4000` only if you want the frontend to call a separately addressed local API directly instead of using the Vite proxy.
 
@@ -107,8 +108,9 @@ This repo is prepared for a Vercel-hosted manager demo:
 Suggested deployment setup:
 
 1. Create a managed Postgres database seeded with the synthetic 2025 tables.
-2. Create a read-only database user for the demo API.
-3. Link the repo to Vercel:
+2. Create a read-only database user for analytics reads.
+3. Create a separate writable Postgres database or schema for report jobs/cache and run the reports migration there.
+4. Link the repo to Vercel:
 
 ```bash
 vercel link
@@ -127,6 +129,7 @@ vercel env add OPENROUTER_API_KEY
 vercel env add OPENROUTER_BASE_URL
 vercel env add OPENROUTER_MODEL
 vercel env add REPORT_PROMPT_VERSION
+vercel env add REPORTS_DATABASE_URL
 vercel env add VITE_API_BASE_URL
 vercel env add VITE_DEMO_EXPORTS_ENABLED
 vercel env add VITE_DEMO_LABEL
@@ -138,6 +141,7 @@ Recommended production values:
 ```bash
 NODE_ENV=production
 DATABASE_URL=postgres://readonly_user:password@host:5432/grizcam_demo
+REPORTS_DATABASE_URL=postgres://reports_user:password@host:5432/grizcam_reports
 ALLOWED_ORIGINS=https://your-project.vercel.app
 DEMO_EXPORTS_ENABLED=false
 API_RATE_LIMIT_WINDOW_MS=60000
@@ -152,7 +156,13 @@ VITE_DEMO_LABEL=Synthetic data demo
 VITE_APP_TITLE=GrizCam Demo | Yellowstone 2025 Analytics
 ```
 
-5. Deploy:
+5. Apply the reports migration to the writable reports database:
+
+```bash
+psql "$REPORTS_DATABASE_URL" -f apps/api/migrations/001_analytics_reports.sql
+```
+
+6. Deploy:
 
 ```bash
 vercel deploy
@@ -162,7 +172,8 @@ vercel deploy --prod
 Notes:
 
 - Leave `VITE_API_BASE_URL` empty on Vercel to use same-origin `/api`.
-- `DATABASE_URL` is preferred in hosted environments.
+- `DATABASE_URL` should remain read-only for analytics queries.
+- `REPORTS_DATABASE_URL` should point at a writable database for report cache/job state.
 - CSV export is disabled by default for the public demo.
 - You can still use `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` locally if you do not want a local `DATABASE_URL`.
 - The production API expects `DATABASE_URL` and `ALLOWED_ORIGINS`.
@@ -182,6 +193,7 @@ Supported variables:
 - `OPENROUTER_BASE_URL`
 - `OPENROUTER_MODEL`
 - `REPORT_PROMPT_VERSION`
+- `REPORTS_DATABASE_URL`
 - `VITE_API_BASE_URL`
 - `DEMO_EXPORTS_ENABLED`
 - `NODE_ENV`
@@ -204,6 +216,7 @@ Recommended minimum Vercel set:
 - `OPENROUTER_BASE_URL`
 - `OPENROUTER_MODEL`
 - `REPORT_PROMPT_VERSION`
+- `REPORTS_DATABASE_URL`
 - `VITE_API_BASE_URL`
 - `VITE_DEMO_EXPORTS_ENABLED`
 - `VITE_DEMO_LABEL`
@@ -227,6 +240,7 @@ Recommended minimum Vercel set:
 - `POST /api/query/generate-sql`
 - `GET /api/reports/latest`
 - `GET /api/reports/status`
+- `GET /api/reports/health`
 - `POST /api/reports/generate`
 
 The query page also includes a single-turn AI SQL helper. It sends a natural-language request to the backend, the backend calls OpenRouter with the server-side GrizCam schema briefing, then the generated SQL is inserted into the editor and pushed through the existing validator and query runner.
@@ -236,10 +250,11 @@ The query page also includes a single-turn AI SQL helper. It sends a natural-lan
 ## Reports Briefing Cache
 
 - Report generation reuses the existing `overview` and `analytics-lab` aggregates instead of shipping raw events to the model.
-- The backend builds a compact snapshot, hashes `snapshot + REPORT_PROMPT_VERSION + OPENROUTER_MODEL`, and caches the generated JSON briefing in Postgres.
-- Exact hash matches reuse the cached report immediately.
-- If the current filter key has an older ready report while a new snapshot is regenerating, the UI shows that stale report with a refresh indicator.
-- The reports table is created automatically on API startup, and the matching SQL migration is included at [`/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql`](/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql).
+- The backend queues report work first, then builds the analytics snapshot and computes the hash inside the background worker.
+- Exact hash matches reuse an already-ready report without another model call.
+- If the current filter key has an older ready report while a new snapshot is regenerating, the UI shows that stale report with a refresh indicator and current phase label.
+- Reports storage is separate from analytics reads and requires a writable database configured via `REPORTS_DATABASE_URL`.
+- The reports table is no longer created on live requests; apply the SQL migration at [`/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql`](/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql) to the writable reports database.
 
 All chart and event endpoints accept the dashboard filter params:
 

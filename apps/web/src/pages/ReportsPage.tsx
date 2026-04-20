@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import type { ReportPhase, ReportViewStatus } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { FilterBar } from "../components/FilterBar";
 import { SectionCard } from "../components/SectionCard";
@@ -10,12 +11,36 @@ import { classNames, formatDurationShort, formatNullableNumber, formatNumber, ti
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
 import { useReportPrefetch } from "../hooks/useReportPrefetch";
 
-const statusPillClass = {
+const statusPillClass: Record<ReportViewStatus | "idle", string> = {
+  idle: "border-white/10 bg-white/5 text-slate-200",
   ready: "border-emerald-400/20 bg-emerald-400/10 text-emerald-100",
   generating: "border-sky-400/20 bg-sky-400/10 text-sky-100",
   stale: "border-amber-400/20 bg-amber-400/10 text-amber-100",
-  error: "border-rose-400/20 bg-rose-400/10 text-rose-100"
-} as const;
+  error: "border-rose-400/20 bg-rose-400/10 text-rose-100",
+  disabled: "border-slate-400/20 bg-slate-400/10 text-slate-200"
+};
+
+const phaseLabel: Record<ReportPhase, string> = {
+  idle: "Idle",
+  disabled: "Disabled",
+  queued: "Queued",
+  building_snapshot: "Building snapshot",
+  calling_model: "Generating briefing",
+  validating_response: "Validating response",
+  ready: "Ready",
+  error: "Failed"
+};
+
+const phaseDescription: Record<ReportPhase, string> = {
+  idle: "No report job has been created for this filter state yet.",
+  disabled: "Reports storage is not configured, so the feature is unavailable until a writable reports database is connected.",
+  queued: "The report job has been accepted and is waiting to start.",
+  building_snapshot: "The API is collecting existing analytics aggregates and shaping the compact snapshot for the report.",
+  calling_model: "The report snapshot is ready and the briefing is being generated through OpenRouter.",
+  validating_response: "The model response is being validated and repaired into the required JSON shape if needed.",
+  ready: "The latest report for this filter state is ready.",
+  error: "The latest report attempt failed."
+};
 
 const QueryState = ({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) => (
   <div className="panel rounded-3xl border border-white/8 bg-white/[0.03] px-4 py-10 text-center">
@@ -30,30 +55,44 @@ const actionButtonClass =
 
 export const ReportsPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
-  useReportPrefetch(filters);
+  const prefetchState = useReportPrefetch(filters);
   const stableFilters = useMemo(() => filters, [filters]);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
-  const reportQuery = useQuery({
-    queryKey: ["reports", stableFilters],
-    queryFn: () => api.latestReport(stableFilters),
+  const statusQuery = useQuery({
+    queryKey: ["report-status", stableFilters],
+    queryFn: () => api.reportStatus(stableFilters),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "generating" || status === "stale" ? 2500 : false;
+      return status === "generating" || status === "stale" ? 2000 : false;
     }
   });
 
   const regenerateMutation = useMutation({
     mutationFn: () => api.triggerReportGeneration(stableFilters, true),
     onSuccess: async () => {
-      await reportQuery.refetch();
+      await statusQuery.refetch();
     }
   });
 
-  const reportState = reportQuery.data;
-  const activeRecord = reportState?.status === "stale" ? reportState.stale ?? reportState.latest : reportState?.latest;
-  const snapshot = activeRecord?.snapshot;
-  const report = activeRecord?.report;
+  const reportState = statusQuery.data;
+  const displayRecord = reportState?.status === "stale" ? reportState.stale ?? reportState.current : reportState?.current;
+  const statusRecord = reportState?.current ?? displayRecord;
+  const snapshot = displayRecord?.snapshot;
+  const report = displayRecord?.report;
+  const visibleStatus =
+    reportState && reportState.status !== "idle"
+      ? reportState.status
+      : prefetchState.status !== "idle"
+        ? prefetchState.status
+        : reportState?.status ?? "idle";
+  const visiblePhase =
+    reportState && reportState.phase !== "idle"
+      ? reportState.phase
+      : prefetchState.phase !== "idle"
+        ? prefetchState.phase
+        : reportState?.phase ?? "idle";
+  const visibleReason = reportState?.reason ?? prefetchState.message;
   const isRefreshing = reportState?.status === "stale" || regenerateMutation.isPending;
 
   return (
@@ -63,15 +102,31 @@ export const ReportsPage = () => {
       badge={`${appEnv.demoLabel} • Briefings`}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={patchFilters} onReset={resetFilters} />}
     >
-      {!reportState && reportQuery.isLoading ? (
-        <QueryState title="Preparing operational briefing" detail="Selecting the highest-signal analytics and checking the report cache for this filter state." />
-      ) : reportQuery.error ? (
+      {prefetchState.status === "error" || prefetchState.status === "disabled" ? (
+        <div className="rounded-3xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+          Background prefetch status: {prefetchState.message ?? phaseDescription[prefetchState.phase]}
+        </div>
+      ) : null}
+
+      {!reportState && statusQuery.isLoading ? (
+        <QueryState title="Preparing operational briefing" detail="Checking the reports store and current generation status for this filter state." />
+      ) : statusQuery.error ? (
         <QueryState
           title="Report service unavailable"
-          detail={(reportQuery.error as Error).message || "The reports endpoint returned an unexpected response."}
+          detail={(statusQuery.error as Error).message || "The reports endpoint returned an unexpected response."}
           action={
-            <button type="button" className={actionButtonClass} onClick={() => void reportQuery.refetch()}>
+            <button type="button" className={actionButtonClass} onClick={() => void statusQuery.refetch()}>
               Retry
+            </button>
+          }
+        />
+      ) : visibleStatus === "disabled" ? (
+        <QueryState
+          title="Reports are disabled"
+          detail={visibleReason ?? phaseDescription.disabled}
+          action={
+            <button type="button" className={actionButtonClass} onClick={() => void statusQuery.refetch()}>
+              Recheck configuration
             </button>
           }
         />
@@ -86,14 +141,17 @@ export const ReportsPage = () => {
             }
             actions={
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <div className={classNames("rounded-2xl border px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em]", statusPillClass[reportState?.status ?? "ready"])}>
-                  {reportState?.status === "stale" ? "Refreshing" : reportState?.status ?? "ready"}
+                <div className={classNames("rounded-2xl border px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em]", statusPillClass[visibleStatus])}>
+                  {visibleStatus === "stale" ? "Refreshing" : visibleStatus}
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-slate-200">
+                  {phaseLabel[visiblePhase]}
                 </div>
                 <button
                   type="button"
                   className={actionButtonClass}
                   onClick={() => regenerateMutation.mutate()}
-                  disabled={regenerateMutation.isPending}
+                  disabled={regenerateMutation.isPending || visibleStatus === "disabled"}
                 >
                   {regenerateMutation.isPending ? "Regenerating…" : "Regenerate report"}
                 </button>
@@ -124,7 +182,13 @@ export const ReportsPage = () => {
 
             {isRefreshing ? (
               <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Showing the most recent compatible report while a fresh briefing is being generated for the current analytics state.
+                Showing the last ready report while a fresh report moves through: {phaseLabel[visiblePhase].toLowerCase()}.
+              </div>
+            ) : null}
+
+            {visibleReason && visibleStatus === "error" ? (
+              <div className="mt-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                {visibleReason}
               </div>
             ) : null}
           </SectionCard>
@@ -270,24 +334,47 @@ export const ReportsPage = () => {
         </>
       ) : (
         <QueryState
-          title={reportState?.status === "error" ? "Report generation failed" : "Generating operational briefing"}
-          detail={
-            reportState?.latest?.error
-              ? reportState.latest.error
-              : "A background report is being prepared from the current analytics slice. If a cached match exists, it will appear here automatically."
+          title={
+            visibleStatus === "error"
+              ? "Report generation failed"
+              : visibleStatus === "idle"
+                ? "No report cached yet"
+                : "Generating operational briefing"
           }
+          detail={visibleReason ?? phaseDescription[visiblePhase]}
           action={
             <button
               type="button"
               className={actionButtonClass}
               onClick={() => regenerateMutation.mutate()}
-              disabled={regenerateMutation.isPending}
+              disabled={regenerateMutation.isPending || visibleStatus === "disabled"}
             >
-              {regenerateMutation.isPending ? "Regenerating…" : "Generate report"}
+              {regenerateMutation.isPending ? "Regenerating…" : visibleStatus === "idle" ? "Generate report" : "Retry generation"}
             </button>
           }
         />
       )}
+
+      <SectionCard title="Generation Status" subtitle="Current backend phase and any available diagnostics for this filter state.">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl bg-white/5 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</div>
+            <div className="mt-2 text-sm text-white">{titleCase(visibleStatus)}</div>
+          </div>
+          <div className="rounded-2xl bg-white/5 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Phase</div>
+            <div className="mt-2 text-sm text-white">{phaseLabel[visiblePhase]}</div>
+          </div>
+          <div className="rounded-2xl bg-white/5 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Reports Cache Key</div>
+            <div className="mt-2 text-sm text-white">{reportState?.cacheKey ? `${reportState.cacheKey.slice(0, 12)}…` : "Not available yet"}</div>
+          </div>
+          <div className="rounded-2xl bg-white/5 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Latest Error</div>
+            <div className="mt-2 text-sm text-white">{statusRecord?.debug?.lastErrorMessage ?? visibleReason ?? "None"}</div>
+          </div>
+        </div>
+      </SectionCard>
 
       {snapshot ? (
         <SectionCard title="Snapshot Context" subtitle="Filter-aware summary of the analytics state used for this report.">

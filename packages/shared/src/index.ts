@@ -561,8 +561,27 @@ export type OperationalReport = z.infer<typeof operationalReportSchema>;
 export const reportJobStatusSchema = z.enum(["queued", "generating", "ready", "error"]);
 export type ReportJobStatus = z.infer<typeof reportJobStatusSchema>;
 
-export const reportViewStatusSchema = z.enum(["generating", "ready", "stale", "error"]);
+export const reportPhaseSchema = z.enum([
+  "idle",
+  "disabled",
+  "queued",
+  "building_snapshot",
+  "calling_model",
+  "validating_response",
+  "ready",
+  "error"
+]);
+export type ReportPhase = z.infer<typeof reportPhaseSchema>;
+
+export const reportViewStatusSchema = z.enum(["idle", "disabled", "generating", "ready", "stale", "error"]);
 export type ReportViewStatus = z.infer<typeof reportViewStatusSchema>;
+
+export const reportDebugSchema = z.object({
+  lastErrorCode: z.string().nullable().optional(),
+  lastErrorMessage: z.string().nullable().optional(),
+  timingMs: z.record(z.string(), z.number()).optional()
+});
+export type ReportDebug = z.infer<typeof reportDebugSchema>;
 
 export const reportSnapshotTrendSchema = z.object({
   label: z.string(),
@@ -610,26 +629,30 @@ export type ReportSnapshotSummary = z.infer<typeof reportSnapshotSummarySchema>;
 export const reportRecordSchema = z.object({
   id: z.string().min(1),
   normalizedFilterKey: z.string().min(1),
-  snapshotHash: z.string().min(1),
+  snapshotHash: z.string().nullable().optional(),
   promptVersion: z.string().min(1),
   model: z.string().min(1),
-  jobStatus: reportJobStatusSchema,
+  jobStatus: reportJobStatusSchema.nullable().optional(),
   viewStatus: reportViewStatusSchema,
   isRefreshing: z.boolean().default(false),
   isExactMatch: z.boolean().default(false),
+  phase: reportPhaseSchema,
   generatedAt: z.string().nullable().optional(),
   updatedAt: z.string().nullable().optional(),
   startedAt: z.string().nullable().optional(),
   completedAt: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   report: operationalReportSchema.nullable().optional(),
-  snapshot: reportSnapshotSummarySchema.nullable().optional()
+  snapshot: reportSnapshotSummarySchema.nullable().optional(),
+  debug: reportDebugSchema.nullable().optional()
 });
 export type ReportRecord = z.infer<typeof reportRecordSchema>;
 
 export const getReportResponseSchema = z.object({
   status: reportViewStatusSchema,
-  cacheKey: z.string(),
+  cacheKey: z.string().nullable().optional(),
+  phase: reportPhaseSchema,
+  reason: z.string().nullable().optional(),
   latest: reportRecordSchema.nullable(),
   stale: reportRecordSchema.nullable().optional()
 });
@@ -642,17 +665,21 @@ export const triggerReportRequestSchema = z.object({
 export type TriggerReportRequest = z.infer<typeof triggerReportRequestSchema>;
 
 export const triggerReportResponseSchema = z.object({
-  status: reportJobStatusSchema,
-  cacheKey: z.string(),
+  status: reportViewStatusSchema,
+  phase: reportPhaseSchema,
+  cacheKey: z.string().nullable().optional(),
   reportId: z.string(),
   isExactMatch: z.boolean(),
-  report: reportRecordSchema.nullable().optional()
+  report: reportRecordSchema.nullable().optional(),
+  reason: z.string().nullable().optional()
 });
 export type TriggerReportResponse = z.infer<typeof triggerReportResponseSchema>;
 
 export const reportStatusResponseSchema = z.object({
   status: reportViewStatusSchema,
-  cacheKey: z.string(),
+  cacheKey: z.string().nullable().optional(),
+  phase: reportPhaseSchema,
+  reason: z.string().nullable().optional(),
   current: reportRecordSchema.nullable(),
   stale: reportRecordSchema.nullable().optional()
 });

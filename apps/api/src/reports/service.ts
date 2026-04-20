@@ -1,118 +1,113 @@
 import { randomUUID } from "node:crypto";
-import type {
-  DashboardFilters,
-  GetReportResponse,
-  ReportStatusResponse,
-  TriggerReportResponse
-} from "@grizcam/shared";
+import type { DashboardFilters, GetReportResponse, ReportPhase, ReportStatusResponse, TriggerReportResponse } from "@grizcam/shared";
 import { appConfig } from "../config.js";
+import { pool, reportsPool } from "../db.js";
 import { getAnalyticsLab, getOverview } from "../queries/dashboard.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
 import { buildReportFilterKey, buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
 import {
   createQueuedReport,
-  ensureReportsTable,
-  findExactReport,
+  findExactReadyReport,
   findLatestByFilterKey,
   findLatestReadyByFilterKey,
   getReportById,
-  markReportError,
-  markReportGenerating,
-  markReportQueued,
-  markReportReady,
+  reportsStoreConfigured,
   toReportRecord,
+  updateReportPhase,
   type StoredReportRow
 } from "./storage.js";
 
 const inflightReportIds = new Set<string>();
 const reportClient = createOpenRouterReportClient();
 
-type PreparedReportContext = {
-  filters: DashboardFilters;
-  filterKey: string;
-  snapshotHash: string;
-  snapshot: ReturnType<typeof buildReportSnapshot>;
-};
+const toDisabledResponse = (reason = "Reports are disabled because REPORTS_DATABASE_URL is not configured."): GetReportResponse => ({
+  status: "disabled",
+  cacheKey: null,
+  phase: "disabled",
+  reason,
+  latest: null,
+  stale: null
+});
 
-const prepareReportContext = async (filters: DashboardFilters): Promise<PreparedReportContext> => {
-  const [overview, analytics] = await Promise.all([getOverview(filters), getAnalyticsLab(filters)]);
-  const snapshot = buildReportSnapshot(filters, overview, analytics);
-  const filterKey = buildReportFilterKey(filters);
-  const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
+const toErrorResponse = (reason: string): GetReportResponse => ({
+  status: "error",
+  cacheKey: null,
+  phase: "error",
+  reason,
+  latest: null,
+  stale: null
+});
 
-  return {
-    filters,
-    filterKey,
-    snapshotHash,
-    snapshot
-  };
+const toIdleResponse = (): GetReportResponse => ({
+  status: "idle",
+  cacheKey: null,
+  phase: "idle",
+  reason: null,
+  latest: null,
+  stale: null
+});
+
+const phaseToViewStatus = (phase: ReportPhase) => {
+  switch (phase) {
+    case "ready":
+      return "ready" as const;
+    case "error":
+      return "error" as const;
+    case "disabled":
+      return "disabled" as const;
+    case "idle":
+      return "idle" as const;
+    default:
+      return "generating" as const;
+  }
 };
 
 export const selectLatestReportView = (input: {
-  exact: StoredReportRow | null;
   latestByFilter: StoredReportRow | null;
   staleReady: StoredReportRow | null;
 }): GetReportResponse => {
-  const cacheKey = input.exact?.snapshotHash ?? input.latestByFilter?.snapshotHash ?? input.staleReady?.snapshotHash ?? "pending";
+  const cacheKey = input.latestByFilter?.snapshotHash ?? input.staleReady?.snapshotHash ?? null;
 
-  if (input.exact?.jobStatus === "ready") {
+  if (!input.latestByFilter) {
+    return {
+      ...toIdleResponse(),
+      cacheKey
+    };
+  }
+
+  if (input.latestByFilter.jobStatus === "ready") {
     return {
       status: "ready",
       cacheKey,
-      latest: toReportRecord(input.exact, "ready", { isExactMatch: true })
+      phase: input.latestByFilter.phase,
+      reason: null,
+      latest: toReportRecord(input.latestByFilter, "ready"),
+      stale: null
     };
   }
 
-  if (input.exact && (input.exact.jobStatus === "queued" || input.exact.jobStatus === "generating")) {
-    const stale = input.staleReady ? toReportRecord(input.staleReady, "stale", { isRefreshing: true }) : null;
-    return {
-      status: stale ? "stale" : "generating",
-      cacheKey,
-      latest: toReportRecord(input.exact, stale ? "stale" : "generating", { isExactMatch: true, isRefreshing: Boolean(stale) }),
-      stale
-    };
-  }
-
-  if (input.exact?.jobStatus === "error") {
+  if (input.latestByFilter.jobStatus === "error") {
     const stale = input.staleReady ? toReportRecord(input.staleReady, "stale", { isRefreshing: false }) : null;
     return {
       status: stale ? "stale" : "error",
       cacheKey,
-      latest: toReportRecord(input.exact, stale ? "stale" : "error", { isExactMatch: true }),
+      phase: input.latestByFilter.phase,
+      reason: input.latestByFilter.error,
+      latest: toReportRecord(input.latestByFilter, stale ? "stale" : "error"),
       stale
     };
   }
 
-  if (input.latestByFilter && (input.latestByFilter.jobStatus === "queued" || input.latestByFilter.jobStatus === "generating")) {
-    const stale = input.staleReady ? toReportRecord(input.staleReady, "stale", { isRefreshing: true }) : null;
-    return {
-      status: stale ? "stale" : "generating",
-      cacheKey,
-      latest: toReportRecord(input.latestByFilter, stale ? "stale" : "generating", { isRefreshing: Boolean(stale) }),
-      stale
-    };
-  }
-
-  if (input.latestByFilter?.jobStatus === "ready") {
-    return {
-      status: "ready",
-      cacheKey,
-      latest: toReportRecord(input.latestByFilter, "ready")
-    };
-  }
-
-  if (input.latestByFilter?.jobStatus === "error") {
-    return {
-      status: "error",
-      cacheKey,
-      latest: toReportRecord(input.latestByFilter, "error")
-    };
-  }
-
+  const stale = input.staleReady ? toReportRecord(input.staleReady, "stale", { isRefreshing: true }) : null;
   return {
-    status: "generating",
+    status: stale ? "stale" : "generating",
     cacheKey,
-    latest: null
+    phase: input.latestByFilter.phase,
+    reason: null,
+    latest: toReportRecord(input.latestByFilter, stale ? "stale" : phaseToViewStatus(input.latestByFilter.phase), {
+      isRefreshing: Boolean(stale)
+    }),
+    stale
   };
 };
 
@@ -122,19 +117,112 @@ const scheduleReportGeneration = (reportId: string) => {
   }
 
   inflightReportIds.add(reportId);
+
   setTimeout(async () => {
+    const overallStartedAt = Date.now();
     try {
       const row = await getReportById(reportId);
-      if (!row || !row.snapshot) {
+      if (!row) {
         return;
       }
 
-      await markReportGenerating(reportId);
-      const report = await reportClient.generateReport(row.snapshot);
-      await markReportReady(reportId, report);
+      await updateReportPhase(reportId, {
+        jobStatus: "generating",
+        phase: "building_snapshot",
+        started: true,
+        debugPatch: {
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          timingMs: {}
+        }
+      });
+
+      const snapshotStartedAt = Date.now();
+      const [overview, analytics] = await Promise.all([getOverview(row.filters), getAnalyticsLab(row.filters)]);
+      const snapshot = buildReportSnapshot(row.filters, overview, analytics);
+      const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
+      const snapshotTimingMs = Date.now() - snapshotStartedAt;
+
+      const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel, reportId);
+      if (exactReady?.report) {
+        await updateReportPhase(reportId, {
+          jobStatus: "ready",
+          phase: "ready",
+          snapshotHash,
+          snapshot,
+          report: exactReady.report,
+          completed: true,
+          debugPatch: {
+            timingMs: {
+              snapshotAssembly: snapshotTimingMs,
+              total: Date.now() - overallStartedAt
+            }
+          }
+        });
+        return;
+      }
+
+      await updateReportPhase(reportId, {
+        jobStatus: "generating",
+        phase: "calling_model",
+        snapshotHash,
+        snapshot,
+        debugPatch: {
+          timingMs: {
+            snapshotAssembly: snapshotTimingMs
+          }
+        }
+      });
+
+      const modelResult = await reportClient.generateReport(snapshot);
+
+      await updateReportPhase(reportId, {
+        jobStatus: "generating",
+        phase: "validating_response",
+        snapshotHash,
+        snapshot,
+        debugPatch: {
+          timingMs: {
+            snapshotAssembly: snapshotTimingMs,
+            modelRequest: modelResult.timingMs.modelRequest,
+            validation: modelResult.timingMs.validation
+          }
+        }
+      });
+
+      await updateReportPhase(reportId, {
+        jobStatus: "ready",
+        phase: "ready",
+        snapshotHash,
+        snapshot,
+        report: modelResult.report,
+        completed: true,
+        debugPatch: {
+          timingMs: {
+            snapshotAssembly: snapshotTimingMs,
+            modelRequest: modelResult.timingMs.modelRequest,
+            validation: modelResult.timingMs.validation,
+            total: Date.now() - overallStartedAt
+          }
+        }
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Report generation failed.";
-      await markReportError(reportId, message);
+      await updateReportPhase(reportId, {
+        jobStatus: "error",
+        phase: "error",
+        error: message,
+        completed: true,
+        debugPatch: {
+          lastErrorCode: "GENERATION_FAILED",
+          lastErrorMessage: message,
+          timingMs: {
+            total: Date.now() - overallStartedAt
+          }
+        }
+      }).catch(() => {
+        console.error("Failed to persist report error state", { reportId, message });
+      });
     } finally {
       inflightReportIds.delete(reportId);
     }
@@ -142,75 +230,161 @@ const scheduleReportGeneration = (reportId: string) => {
 };
 
 export const getLatestReport = async (filters: DashboardFilters): Promise<GetReportResponse> => {
-  await ensureReportsTable();
-  const context = await prepareReportContext(filters);
-  const [exact, latestByFilter] = await Promise.all([
-    findExactReport(context.snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel),
-    findLatestByFilterKey(context.filterKey)
-  ]);
-  const staleReady = await findLatestReadyByFilterKey(context.filterKey, exact?.id ?? latestByFilter?.id);
+  if (!reportsStoreConfigured()) {
+    return toDisabledResponse();
+  }
 
-  return selectLatestReportView({
-    exact,
-    latestByFilter,
-    staleReady
-  });
+  try {
+    const filterKey = buildReportFilterKey(filters);
+    const latestByFilter = await findLatestByFilterKey(filterKey);
+    const staleReady =
+      latestByFilter?.jobStatus === "ready" ? null : await findLatestReadyByFilterKey(filterKey, latestByFilter?.id);
+
+    return selectLatestReportView({
+      latestByFilter,
+      staleReady
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Reports storage is unavailable.";
+    return toErrorResponse(message);
+  }
 };
 
 export const triggerReportGeneration = async (filters: DashboardFilters, force = false): Promise<TriggerReportResponse> => {
-  await ensureReportsTable();
-  const context = await prepareReportContext(filters);
-  const existing = await findExactReport(context.snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel);
-
-  if (existing && !force) {
-    if (existing.jobStatus === "queued" || existing.jobStatus === "generating") {
-      scheduleReportGeneration(existing.id);
-    }
-
+  if (!reportsStoreConfigured()) {
     return {
-      status: existing.jobStatus,
-      cacheKey: context.snapshotHash,
-      reportId: existing.id,
-      isExactMatch: true,
-      report:
-        existing.jobStatus === "ready"
-          ? toReportRecord(existing, "ready", { isExactMatch: true })
-          : existing.jobStatus === "error"
-            ? toReportRecord(existing, "error", { isExactMatch: true })
-            : toReportRecord(existing, "generating", { isExactMatch: true })
+      status: "disabled",
+      phase: "disabled",
+      cacheKey: null,
+      reportId: "disabled",
+      isExactMatch: false,
+      report: null,
+      reason: "Reports are disabled because REPORTS_DATABASE_URL is not configured."
     };
   }
 
-  const reportRow = existing
-    ? await markReportQueued(existing.id, context.filters, context.snapshot)
-    : await createQueuedReport({
-        id: randomUUID(),
-        filterKey: context.filterKey,
-        snapshotHash: context.snapshotHash,
-        promptVersion: appConfig.reportPromptVersion,
-        model: appConfig.openRouterModel,
-        filters: context.filters,
-        snapshot: context.snapshot
-      });
+  try {
+    const filterKey = buildReportFilterKey(filters);
+    const latestByFilter = await findLatestByFilterKey(filterKey);
 
-  scheduleReportGeneration(reportRow.id);
+    if (latestByFilter && !force) {
+      if (latestByFilter.jobStatus === "queued" || latestByFilter.jobStatus === "generating") {
+        scheduleReportGeneration(latestByFilter.id);
+      }
 
-  return {
-    status: reportRow.jobStatus,
-    cacheKey: context.snapshotHash,
-    reportId: reportRow.id,
-    isExactMatch: true,
-    report: null
-  };
+      return {
+        status:
+          latestByFilter.jobStatus === "ready"
+            ? "ready"
+            : latestByFilter.jobStatus === "error"
+              ? "error"
+              : "generating",
+        phase: latestByFilter.phase,
+        cacheKey: latestByFilter.snapshotHash,
+        reportId: latestByFilter.id,
+        isExactMatch: latestByFilter.jobStatus === "ready",
+        report:
+          latestByFilter.jobStatus === "ready" || latestByFilter.jobStatus === "error"
+            ? toReportRecord(latestByFilter, phaseToViewStatus(latestByFilter.phase), {
+                isExactMatch: latestByFilter.jobStatus === "ready"
+              })
+            : toReportRecord(latestByFilter, "generating"),
+        reason: latestByFilter.error
+      };
+    }
+
+    if (latestByFilter && (latestByFilter.jobStatus === "queued" || latestByFilter.jobStatus === "generating")) {
+      scheduleReportGeneration(latestByFilter.id);
+      return {
+        status: "generating",
+        phase: latestByFilter.phase,
+        cacheKey: latestByFilter.snapshotHash,
+        reportId: latestByFilter.id,
+        isExactMatch: false,
+        report: toReportRecord(latestByFilter, "generating"),
+        reason: null
+      };
+    }
+
+    const reportRow = await createQueuedReport({
+      id: randomUUID(),
+      filterKey,
+      promptVersion: appConfig.reportPromptVersion,
+      model: appConfig.openRouterModel,
+      filters
+    });
+
+    scheduleReportGeneration(reportRow.id);
+
+    return {
+      status: "generating",
+      phase: "queued",
+      cacheKey: null,
+      reportId: reportRow.id,
+      isExactMatch: false,
+      report: toReportRecord(reportRow, "generating"),
+      reason: null
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to queue report generation.";
+    return {
+      status: "error",
+      phase: "error",
+      cacheKey: null,
+      reportId: "unavailable",
+      isExactMatch: false,
+      report: null,
+      reason: message
+    };
+  }
 };
 
 export const getReportStatus = async (filters: DashboardFilters): Promise<ReportStatusResponse> => {
-  await ensureReportsTable();
   const latest = await getLatestReport(filters);
   return {
     status: latest.status,
     cacheKey: latest.cacheKey,
+    phase: latest.phase,
+    reason: latest.reason,
     current: latest.latest,
     stale: latest.stale ?? null
+  };
+};
+
+export const getReportsHealth = async () => {
+  const analyticsHealth = await pool
+    .query("select current_setting('transaction_read_only') as read_only")
+    .then((result) => ({
+      status: "ok",
+      readOnly: String(result.rows[0]?.read_only) === "on"
+    }))
+    .catch(() => ({
+      status: "unavailable",
+      readOnly: null
+    }));
+
+  const reportsHealth = !reportsPool
+    ? {
+        status: "disabled",
+        readOnly: null
+      }
+    : await reportsPool
+        .query("select current_setting('transaction_read_only') as read_only")
+        .then((result) => ({
+          status: "ok",
+          readOnly: String(result.rows[0]?.read_only) === "on"
+        }))
+        .catch(() => ({
+          status: "unavailable",
+          readOnly: null
+        }));
+
+  return {
+    analyticsDatabase: analyticsHealth.status,
+    analyticsDatabaseReadOnly: analyticsHealth.readOnly,
+    reportsDatabase: reportsHealth.status,
+    reportsDatabaseReadOnly: reportsHealth.readOnly,
+    openRouterConfigured: Boolean(appConfig.openRouterApiKey),
+    reportsEnabled: reportsStoreConfigured()
   };
 };
