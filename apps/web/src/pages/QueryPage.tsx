@@ -635,10 +635,10 @@ const ModeSidebar = ({
   onPromptExample: (prompt: string) => void;
   latestQuery: QueryLatestContext | undefined;
 }) => (
-  <aside className="panel h-full rounded-[28px] p-3 overflow-auto">
-    <div className="mb-3">
-      <h2 className="text-lg font-semibold text-white">Query Workspace</h2>
-      <p className="mt-1 text-xs leading-5 text-slate-400">Chat is the primary experience. Switch to Manual when you want the full builder and raw editor controls.</p>
+  <aside className="panel h-full rounded-[24px] p-2.5 overflow-auto">
+    <div className="mb-2.5">
+      <h2 className="text-base font-semibold text-white">Query Workspace</h2>
+      <p className="mt-1 text-[11px] leading-4 text-slate-400">Chat is the primary experience. Switch to Manual when you want the full builder and raw editor controls.</p>
     </div>
     <div className="space-y-2">
       {(["chat", "manual"] as ViewMode[]).map((mode) => (
@@ -646,28 +646,28 @@ const ModeSidebar = ({
           key={mode}
           onClick={() => onSelectMode(mode)}
           className={classNames(
-            "w-full rounded-2xl border px-3 py-2.5 text-left transition",
+            "w-full rounded-2xl border px-3 py-2 text-left transition",
             viewMode === mode
               ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
               : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
           )}
         >
-          <div className="text-sm font-medium">{mode === "chat" ? "Chat" : "Manual"}</div>
-          <div className="mt-1 text-xs text-current/80">
+          <div className="text-sm font-medium leading-none">{mode === "chat" ? "Chat" : "Manual"}</div>
+          <div className="mt-1 text-[11px] leading-4 text-current/80">
             {mode === "chat" ? "Ask for queries and follow up on results." : "Use the full builder, SQL editor, and export flow."}
           </div>
         </button>
       ))}
     </div>
 
-    <div className="mt-5">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Example prompts</div>
-      <div className="mt-2.5 space-y-2">
+    <div className="mt-4">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Example prompts</div>
+      <div className="mt-2 space-y-2">
         {AI_EXAMPLE_PROMPTS.map((prompt) => (
           <button
             key={prompt}
             onClick={() => onPromptExample(prompt)}
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/10"
+            className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-white/10"
           >
             {prompt}
           </button>
@@ -675,14 +675,14 @@ const ModeSidebar = ({
       </div>
     </div>
 
-    <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-3">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest query context</div>
+    <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-2.5">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Latest query context</div>
       {latestQuery?.sql ? (
-        <div className="mt-2.5 space-y-2 text-sm text-slate-300">
-          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-200">
+        <div className="mt-2 space-y-2 text-sm text-slate-300">
+          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-[11px] leading-4 text-slate-200">
             Validation: {latestQuery.validation?.ok ? "passed" : "not yet valid"}
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-xs leading-5 text-slate-400">
+          <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2 text-[11px] leading-4 text-slate-400">
             {latestQuery.result?.rowCount !== undefined
               ? `${formatNumber(latestQuery.result.rowCount, 0)} rows • ${formatNumber(latestQuery.result.durationMs ?? 0, 0)} ms`
               : "No executed result yet"}
@@ -863,8 +863,9 @@ const ChatWorkspace = ({
         title="Query Chat"
         subtitle="Ask for a query or follow up with questions about the dataset, validation feedback, or how to refine the latest SQL."
         className="h-full min-h-0 overflow-hidden"
+        contentClassName="flex min-h-0 flex-col"
       >
-        <div className="flex h-full min-h-0 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col">
           <div
             ref={logRef}
             onScroll={(event) => {
@@ -876,8 +877,8 @@ const ChatWorkspace = ({
           >
             <ChatTranscript messages={messages} isBusy={isBusy} requestStatus={requestStatus} onUseSuggestedSql={onUseSuggestedSql} />
           </div>
-          <div className="mt-2 shrink-0 border-t border-white/10 pt-2.5">
-            <div className="rounded-[28px] border border-white/10 bg-slate-950/90 p-2.5 shadow-[0_-18px_48px_rgba(2,6,23,0.24)]">
+          <div className="mt-1.5 shrink-0 border-t border-white/10 pt-2">
+            <div className="rounded-[24px] border border-white/10 bg-slate-950/90 p-2 shadow-[0_-12px_32px_rgba(2,6,23,0.22)]">
               <textarea
                 value={composerText}
                 onChange={(event) => onComposerTextChange(event.target.value)}
@@ -890,16 +891,16 @@ const ChatWorkspace = ({
                 placeholder={composerAction === "create-query" ? "Ask for a query in plain English" : "Ask about the data, the query, or what a result means"}
                 spellCheck={false}
                 rows={2}
-                className="max-h-24 min-h-[56px] w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm leading-6 text-slate-100 outline-none transition focus:border-emerald-400"
+                className="max-h-20 min-h-[44px] w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm leading-5 text-slate-100 outline-none transition focus:border-emerald-400"
               />
-              <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div className="mt-1.5 flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap gap-2">
                   {(["create-query", "follow-up"] as ComposerAction[]).map((action) => (
                     <button
                       key={action}
                       onClick={() => onComposerActionChange(action)}
                       className={classNames(
-                        "rounded-full border px-3 py-2 text-xs font-medium leading-none transition",
+                        "rounded-full border px-3 py-1.5 text-xs font-medium leading-none transition",
                         composerAction === action
                           ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
                           : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
@@ -912,12 +913,12 @@ const ChatWorkspace = ({
                 <button
                   onClick={onSubmit}
                   disabled={isBusy || composerText.trim().length === 0}
-                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isBusy ? (composerAction === "create-query" ? "Working…" : "Thinking…") : composerAction === "create-query" ? "Send create query" : "Send follow up"}
                 </button>
               </div>
-              {error ? <div className="mt-3 text-sm text-rose-200">{error}</div> : null}
+              {error ? <div className="mt-2 text-xs text-rose-200">{error}</div> : null}
             </div>
           </div>
         </div>
