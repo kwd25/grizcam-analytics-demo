@@ -11,7 +11,7 @@ import { classNames, formatDurationShort, formatNullableNumber, formatNumber, ti
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
 import { useReportPrefetch } from "../hooks/useReportPrefetch";
 
-const statusPillClass: Record<ReportViewStatus | "idle", string> = {
+const statusPillClass: Record<ReportViewStatus, string> = {
   idle: "border-white/10 bg-white/5 text-slate-200",
   ready: "border-emerald-400/20 bg-emerald-400/10 text-emerald-100",
   generating: "border-sky-400/20 bg-sky-400/10 text-sky-100",
@@ -93,6 +93,7 @@ export const ReportsPage = () => {
         ? prefetchState.phase
         : reportState?.phase ?? "idle";
   const visibleReason = reportState?.reason ?? prefetchState.message;
+  const isReportsDisabled = visibleStatus === "disabled" || visiblePhase === "disabled";
   const isRefreshing = reportState?.status === "stale" || regenerateMutation.isPending;
 
   return (
@@ -151,7 +152,7 @@ export const ReportsPage = () => {
                   type="button"
                   className={actionButtonClass}
                   onClick={() => regenerateMutation.mutate()}
-                  disabled={regenerateMutation.isPending || visibleStatus === "disabled"}
+                  disabled={regenerateMutation.isPending || isReportsDisabled}
                 >
                   {regenerateMutation.isPending ? "Regenerating…" : "Regenerate report"}
                 </button>
@@ -347,7 +348,7 @@ export const ReportsPage = () => {
               type="button"
               className={actionButtonClass}
               onClick={() => regenerateMutation.mutate()}
-              disabled={regenerateMutation.isPending || visibleStatus === "disabled"}
+              disabled={regenerateMutation.isPending || isReportsDisabled}
             >
               {regenerateMutation.isPending ? "Regenerating…" : visibleStatus === "idle" ? "Generate report" : "Retry generation"}
             </button>

@@ -15,7 +15,7 @@ const serializeFilters = (filters: DashboardFilters) =>
   });
 
 type PrefetchState = {
-  status: ReportViewStatus | "idle";
+  status: ReportViewStatus;
   phase: ReportPhase;
   message: string | null;
 };
