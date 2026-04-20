@@ -13,10 +13,10 @@ type AppShellProps = PropsWithChildren<{
 }>;
 
 const navItems = [
-  { to: "/", label: "Overview", end: true },
+  { to: "/", label: "Query", end: true },
+  { to: "/overview", label: "Overview" },
   { to: "/ops", label: "Ops" },
   { to: "/advanced", label: "Advanced" },
-  { to: "/query", label: "Query" },
   { to: "/reports", label: "Reports" }
 ];
 
