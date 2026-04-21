@@ -257,23 +257,26 @@ const buildOverviewHighlights = (
       value: overview.kpis.totalEvents,
       detail: `${overview.kpis.totalEvents} grouped events across ${overview.kpis.activeCameras} active cameras in the current filter slice.`
     },
-    ...topComposition,
-    peakDay
-      ? {
-          name: "Peak activity day",
-          value: peakDay.count,
-          detail: `${peakDay.date} recorded ${peakDay.count} grouped events. Recent average is ${round(recentDailyAverage, 1) ?? 0} per day.`
-        }
-      : null,
-    dominantTimeOfDay
-      ? {
-          name: "Dominant time of day",
-          value: dominantTimeOfDay.count,
-          detail: `${dominantTimeOfDay.bucket} contributed ${dominantTimeOfDay.count} grouped events in the current slice.`
-        }
-      : null,
-    ...topSubjectByCamera
-  ].filter((item): item is ReportSnapshotItem => Boolean(item));
+    ...topComposition
+  ];
+
+  if (peakDay) {
+    summary.push({
+      name: "Peak activity day",
+      value: peakDay.count,
+      detail: `${peakDay.date} recorded ${peakDay.count} grouped events. Recent average is ${round(recentDailyAverage, 1) ?? 0} per day.`
+    });
+  }
+
+  if (dominantTimeOfDay) {
+    summary.push({
+      name: "Dominant time of day",
+      value: dominantTimeOfDay.count,
+      detail: `${dominantTimeOfDay.bucket} contributed ${dominantTimeOfDay.count} grouped events in the current slice.`
+    });
+  }
+
+  summary.push(...topSubjectByCamera);
 
   return summary.slice(0, SNAPSHOT_BUDGET.highlights);
 };
@@ -296,37 +299,41 @@ const buildOpsHighlights = (overview: OverviewResponse): ReportSnapshotItem[] =>
       name: "Cameras with alerts",
       value: overview.kpis.camerasWithAlerts,
       detail: `${overview.kpis.camerasWithAlerts} cameras are currently flagged with non-healthy operational status.`
-    },
-    staleCamera
-      ? {
-          name: "Stalest camera",
-          value: round(staleCamera.lastSeenHoursAgo, 1),
-          status: staleCamera.status,
-          detail: `${staleCamera.cameraName} was last seen ${round(staleCamera.lastSeenHoursAgo, 1)} hours ago.`
-        }
-      : null,
-    highestLag
-      ? {
-          name: "Highest lag camera",
-          value: round(highestLag.avgProcessingLagSeconds, 1),
-          status: highestLag.status,
-          detail: `${highestLag.cameraName} is averaging ${Math.round((highestLag.avgProcessingLagSeconds ?? 0) / 60)} minutes of processing lag.`
-        }
-      : null,
-    lowestVoltage
-      ? {
-          name: "Lowest voltage camera",
-          value: round(lowestVoltage.avgVoltage, 2),
-          status: lowestVoltage.status,
-          detail: `${lowestVoltage.cameraName} is averaging ${round(lowestVoltage.avgVoltage, 2)}v.`
-        }
-      : null,
-    {
-      name: "Upload success",
-      value: round(overview.kpis.uploadSuccessPct, 1),
-      detail: `${round(overview.kpis.uploadSuccessPct, 1)}% of grouped events reached upload in the current period.`
     }
-  ].filter((item): item is ReportSnapshotItem => Boolean(item));
+  ];
+
+  if (staleCamera) {
+    items.push({
+      name: "Stalest camera",
+      value: round(staleCamera.lastSeenHoursAgo, 1),
+      status: staleCamera.status,
+      detail: `${staleCamera.cameraName} was last seen ${round(staleCamera.lastSeenHoursAgo, 1)} hours ago.`
+    });
+  }
+
+  if (highestLag) {
+    items.push({
+      name: "Highest lag camera",
+      value: round(highestLag.avgProcessingLagSeconds, 1),
+      status: highestLag.status,
+      detail: `${highestLag.cameraName} is averaging ${Math.round((highestLag.avgProcessingLagSeconds ?? 0) / 60)} minutes of processing lag.`
+    });
+  }
+
+  if (lowestVoltage) {
+    items.push({
+      name: "Lowest voltage camera",
+      value: round(lowestVoltage.avgVoltage, 2),
+      status: lowestVoltage.status,
+      detail: `${lowestVoltage.cameraName} is averaging ${round(lowestVoltage.avgVoltage, 2)}v.`
+    });
+  }
+
+  items.push({
+    name: "Upload success",
+    value: round(overview.kpis.uploadSuccessPct, 1),
+    detail: `${round(overview.kpis.uploadSuccessPct, 1)}% of grouped events reached upload in the current period.`
+  });
 
   return items.slice(0, SNAPSHOT_BUDGET.highlights);
 };
