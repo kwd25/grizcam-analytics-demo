@@ -112,18 +112,34 @@ const callOpenRouter = async (messages: Array<{ role: "system" | "user"; content
     throw new Error("OPENROUTER_API_KEY is not configured on the server.");
   }
 
-  const response = await fetch(`${appConfig.openRouterBaseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${appConfig.openRouterApiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: appConfig.openRouterModel,
-      messages,
-      temperature: 0.2
-    })
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), appConfig.reportModelTimeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(`${appConfig.openRouterBaseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${appConfig.openRouterApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: appConfig.openRouterModel,
+        messages,
+        temperature: 0.2
+      }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Report generation timed out after ${Math.round(appConfig.reportModelTimeoutMs / 1000)} seconds while connecting to OpenRouter.`);
+    }
+    const message = error instanceof Error ? error.message : "Unknown OpenRouter connection failure.";
+    throw new Error(`Report generation could not connect to OpenRouter. ${message}`);
+  }
+
+  clearTimeout(timeoutId);
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");

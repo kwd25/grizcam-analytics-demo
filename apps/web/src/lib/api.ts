@@ -19,6 +19,7 @@ import type {
   QueryRunResponse,
   GetReportResponse,
   ReportHealthResponse,
+  ReportSourceBundle,
   ReportStatusResponse,
   TriggerReportResponse,
   SubjectCameraHeatmapPoint,
@@ -222,8 +223,8 @@ export const api = {
   latestReport: (filters: DashboardFilters) => fetchJson<GetReportResponse>("/api/reports/latest", filters),
   reportHealth: () => fetchJson<ReportHealthResponse>("/api/reports/health"),
   reportStatus: (filters: DashboardFilters) => fetchJson<ReportStatusResponse>("/api/reports/status", filters),
-  triggerReportGeneration: (filters: DashboardFilters, force = false) =>
-    postJson<TriggerReportResponse>("/api/reports/generate", { filters, force }, REPORT_REQUEST_TIMEOUT_MS),
+  triggerReportGeneration: (filters: DashboardFilters, snapshot: ReportSourceBundle, force = false) =>
+    postJson<TriggerReportResponse>("/api/reports/generate", { filters, snapshot, force }, REPORT_REQUEST_TIMEOUT_MS),
   queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
   generateQuerySql: (prompt: string) => postQueryJson<GenerateSqlResponse>("/api/query/generate-sql", { prompt }),
   queryFollowUp: (body: QueryFollowUpRequest) => postQueryJson<QueryFollowUpResponse>("/api/query/follow-up", body),

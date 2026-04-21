@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DashboardFilters, OperationalReport, ReportSnapshotSummary } from "@grizcam/shared";
+import { buildReportSnapshot, type DashboardFilters, type OperationalReport, type ReportSnapshotSummary } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
-import { buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
+import { hashReportSnapshot } from "./snapshot.js";
 import { selectLatestReportView } from "./service.js";
 import type { StoredReportRow } from "./storage.js";
 
@@ -217,26 +217,6 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
         suspiciousValueCounts: [{ label: "Suspicious numeric values", count: 3 }],
         pipelineConsistency: [{ label: "AI processed without summary", count: 1 }]
       }
-    },
-    {
-      dailyActivity: [
-        { date: "2025-01-01", cameraName: "North Ridge", uniqueEventGroups: 16, rawRows: 20 },
-        { date: "2025-01-01", cameraName: "South Ridge", uniqueEventGroups: 10, rawRows: 12 },
-        { date: "2025-01-02", cameraName: "North Ridge", uniqueEventGroups: 22, rawRows: 28 }
-      ],
-      timeOfDay: [
-        { bucket: "morning", wildlife: 18, human: 2, vehicle: 0, emptyScene: 1 },
-        { bucket: "evening", wildlife: 26, human: 3, vehicle: 1, emptyScene: 0 }
-      ],
-      subjectByCamera: [
-        { cameraName: "North Ridge", subjectClass: "deer", uniqueEventGroups: 20 },
-        { cameraName: "South Ridge", subjectClass: "human", uniqueEventGroups: 6 }
-      ],
-      composition: [
-        { category: "wildlife", uniqueEventGroups: 85 },
-        { category: "human", uniqueEventGroups: 20 },
-        { category: "vehicle", uniqueEventGroups: 15 }
-      ]
     }
   );
 

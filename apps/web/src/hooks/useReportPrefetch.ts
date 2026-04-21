@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type { DashboardFilters, ReportPhase, ReportViewStatus } from "@grizcam/shared";
-import { api, QueryRequestError } from "../lib/api";
 import { useDebouncedValue } from "./useDebouncedValue";
 
 const serializeFilters = (filters: DashboardFilters) =>
@@ -41,54 +40,11 @@ export const useReportPrefetch = (filters: DashboardFilters) => {
       }
 
       lastTriggeredKey.current = nextKey;
-
-      try {
-        const health = await api.reportHealth();
-        if (cancelled) {
-          return;
-        }
-
-        if (!health.reportsEnabled && health.supportsEphemeralGeneration) {
-          setState({
-            status: "idle",
-            phase: "idle",
-            message: "Background prefetch is disabled because reports are running in on-demand mode."
-          });
-          return;
-        }
-
+      if (!cancelled) {
         setState({
-          status: "generating",
-          phase: "queued",
-          message: null
-        });
-
-        const result = await api.triggerReportGeneration(debouncedFilters);
-        if (cancelled) {
-          return;
-        }
-
-        setState({
-          status: result.status,
-          phase: result.phase,
-          message: result.reason ?? null
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        const message =
-          error instanceof QueryRequestError
-            ? error.message
-            : error instanceof Error
-              ? error.message
-              : "Background report generation failed.";
-        console.error("Background report generation failed", { message });
-        setState({
-          status: "error",
-          phase: "error",
-          message
+          status: "idle",
+          phase: "idle",
+          message: "Background generation is paused. Load analytics inputs on the Reports tab, then generate manually."
         });
       }
     };

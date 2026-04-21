@@ -1,4 +1,5 @@
 import { z } from "zod";
+export { buildReportFilterKey, buildReportSnapshot, normalizeReportFilters } from "./reportSnapshot.js";
 
 const splitCsv = (value: unknown) => {
   if (Array.isArray(value)) {
@@ -640,6 +641,9 @@ export const reportSnapshotSummarySchema = z.object({
 });
 export type ReportSnapshotSummary = z.infer<typeof reportSnapshotSummarySchema>;
 
+export const reportSourceBundleSchema = reportSnapshotSummarySchema;
+export type ReportSourceBundle = z.infer<typeof reportSourceBundleSchema>;
+
 export const reportRecordSchema = z.object({
   id: z.string().min(1),
   normalizedFilterKey: z.string().min(1),
@@ -675,6 +679,7 @@ export type GetReportResponse = z.infer<typeof getReportResponseSchema>;
 
 export const triggerReportRequestSchema = z.object({
   filters: dashboardFiltersSchema,
+  snapshot: reportSourceBundleSchema,
   force: z.boolean().optional().default(false)
 });
 export type TriggerReportRequest = z.infer<typeof triggerReportRequestSchema>;

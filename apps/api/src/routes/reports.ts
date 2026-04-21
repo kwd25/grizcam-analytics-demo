@@ -19,5 +19,5 @@ reportsRouter.get("/status", async (request, response) => {
 
 reportsRouter.post("/generate", async (request, response) => {
   const payload = triggerReportRequestSchema.parse(request.body);
-  response.status(202).json(await triggerReportGeneration(payload.filters, payload.force));
+  response.status(202).json(await triggerReportGeneration(payload.filters, payload.snapshot, payload.force));
 });
