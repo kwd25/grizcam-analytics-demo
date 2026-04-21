@@ -250,6 +250,7 @@ export const toReportRecord = (
 ): ReportRecord => ({
   id: row.id,
   normalizedFilterKey: row.normalizedFilterKey,
+  sourceMode: "persistent",
   snapshotHash: row.snapshotHash,
   promptVersion: row.promptVersion,
   model: row.model,

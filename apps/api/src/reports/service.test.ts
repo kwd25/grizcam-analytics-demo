@@ -67,9 +67,12 @@ const snapshot: ReportSnapshotSummary = {
   filters,
   dateRange: { startDate: "2025-01-01", endDate: "2025-01-31" },
   overviewMetrics: [{ label: "Grouped events", value: 120, note: "Distinct grouped events in the current slice." }],
+  overviewHighlights: [{ name: "Grouped event volume", value: 120, detail: "120 grouped events across 8 active cameras." }],
   pipeline: [{ label: "Captured groups", value: 120, note: "Distinct grouped events in the current slice." }],
+  opsHighlights: [{ name: "Cameras with alerts", value: 2, detail: "2 cameras are flagged with non-healthy status." }],
   topCameras: [{ name: "North Ridge", value: 40, detail: "40 grouped events." }],
   atRiskCameras: [{ name: "South Ridge", value: 71.2, detail: "avg voltage 11.20v", status: "warning" }],
+  advancedHighlights: [{ name: "South Ridge forecast gap", value: -44.1, detail: "Actual 4 vs expected 7.2." }],
   notableShifts: [{ name: "North Ridge • wildlife", value: 8.4, detail: "Recent share 60% vs baseline 51%." }],
   anomalies: [{ name: "South Ridge forecast delta", value: -44.1, detail: "Actual 4 vs expected 7.2." }],
   trends: [{ label: "Wildlife activity", direction: "up", deltaPct: 12.3, note: "Recent wildlife grouped-event volume versus baseline." }],
@@ -214,11 +217,34 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
         suspiciousValueCounts: [{ label: "Suspicious numeric values", count: 3 }],
         pipelineConsistency: [{ label: "AI processed without summary", count: 1 }]
       }
+    },
+    {
+      dailyActivity: [
+        { date: "2025-01-01", cameraName: "North Ridge", uniqueEventGroups: 16, rawRows: 20 },
+        { date: "2025-01-01", cameraName: "South Ridge", uniqueEventGroups: 10, rawRows: 12 },
+        { date: "2025-01-02", cameraName: "North Ridge", uniqueEventGroups: 22, rawRows: 28 }
+      ],
+      timeOfDay: [
+        { bucket: "morning", wildlife: 18, human: 2, vehicle: 0, emptyScene: 1 },
+        { bucket: "evening", wildlife: 26, human: 3, vehicle: 1, emptyScene: 0 }
+      ],
+      subjectByCamera: [
+        { cameraName: "North Ridge", subjectClass: "deer", uniqueEventGroups: 20 },
+        { cameraName: "South Ridge", subjectClass: "human", uniqueEventGroups: 6 }
+      ],
+      composition: [
+        { category: "wildlife", uniqueEventGroups: 85 },
+        { category: "human", uniqueEventGroups: 20 },
+        { category: "vehicle", uniqueEventGroups: 15 }
+      ]
     }
   );
 
   assert.equal(assembled.topCameras.length, 2);
   assert.equal(assembled.atRiskCameras[0]?.name, "South Ridge");
+  assert.ok(assembled.overviewHighlights.length > 0);
+  assert.ok(assembled.opsHighlights.length > 0);
+  assert.ok(assembled.advancedHighlights.length > 0);
   assert.ok(assembled.dataQualityCaveats.some((item) => item.includes("Voltage coverage")));
   assert.ok(assembled.narrativeContext.some((item) => item.includes("stale camera")));
 });

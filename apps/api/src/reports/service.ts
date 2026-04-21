@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DashboardFilters, GetReportResponse, ReportPhase, ReportStatusResponse, TriggerReportResponse } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { ensureReportsStoreReady, pool, reportsStoreReady } from "../db.js";
-import { getAnalyticsLab, getOverview } from "../queries/dashboard.js";
+import { getAnalyticsLab, getComposition, getDailyActivity, getOverview, getSubjectByCamera, getTimeOfDayComposition } from "../queries/dashboard.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
 import { buildReportFilterKey, buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
 import {
@@ -19,6 +19,38 @@ import {
 const inflightReportIds = new Set<string>();
 const reportClient = createOpenRouterReportClient();
 const supportsEphemeralGeneration = () => Boolean(appConfig.openRouterApiKey);
+
+const buildReportSourceSnapshot = async (filters: DashboardFilters) => {
+  const analyticsFetchStartedAt = Date.now();
+  const [overview, analytics, dailyActivity, timeOfDay, subjectByCamera, composition] = await Promise.all([
+    getOverview(filters),
+    getAnalyticsLab(filters),
+    getDailyActivity(filters),
+    getTimeOfDayComposition(filters),
+    getSubjectByCamera(filters),
+    getComposition(filters)
+  ]);
+  const analyticsFetch = Date.now() - analyticsFetchStartedAt;
+
+  const snapshotAssemblyStartedAt = Date.now();
+  const snapshot = buildReportSnapshot(filters, overview, analytics, {
+    dailyActivity,
+    timeOfDay,
+    subjectByCamera,
+    composition
+  });
+
+  return {
+    snapshot,
+    timingMs: {
+      analyticsFetch,
+      snapshotAssembly: Date.now() - snapshotAssemblyStartedAt
+    }
+  };
+};
+
+const generateOperationalBriefing = async (snapshot: Awaited<ReturnType<typeof buildReportSourceSnapshot>>["snapshot"]) =>
+  reportClient.generateReport(snapshot);
 
 const toDisabledResponse = (
   reason = "Reports are unavailable. Configure REPORTS_DATABASE_URL or use a writable DATABASE_URL for reports."
@@ -104,13 +136,11 @@ const getReportsStoreIssue = async () => {
 
 const generateEphemeralReport = async (filters: DashboardFilters) => {
   const overallStartedAt = Date.now();
-  const snapshotStartedAt = Date.now();
-  const [overview, analytics] = await Promise.all([getOverview(filters), getAnalyticsLab(filters)]);
-  const snapshot = buildReportSnapshot(filters, overview, analytics);
+  const sourceSnapshot = await buildReportSourceSnapshot(filters);
+  const snapshot = sourceSnapshot.snapshot;
   const filterKey = buildReportFilterKey(filters);
   const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-  const snapshotTimingMs = Date.now() - snapshotStartedAt;
-  const modelResult = await reportClient.generateReport(snapshot);
+  const modelResult = await generateOperationalBriefing(snapshot);
   const completedAt = new Date().toISOString();
 
   return {
@@ -125,6 +155,7 @@ const generateEphemeralReport = async (filters: DashboardFilters) => {
       snapshotHash,
       promptVersion: appConfig.reportPromptVersion,
       model: appConfig.openRouterModel,
+      sourceMode: "ephemeral" as const,
       jobStatus: "ready" as const,
       viewStatus: "ready" as const,
       isRefreshing: false,
@@ -141,7 +172,8 @@ const generateEphemeralReport = async (filters: DashboardFilters) => {
         lastErrorCode: null,
         lastErrorMessage: null,
         timingMs: {
-          snapshotAssembly: snapshotTimingMs,
+          analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
+          snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
           modelRequest: modelResult.timingMs.modelRequest,
           validation: modelResult.timingMs.validation,
           total: Date.now() - overallStartedAt
@@ -227,11 +259,9 @@ const scheduleReportGeneration = (reportId: string) => {
         }
       });
 
-      const snapshotStartedAt = Date.now();
-      const [overview, analytics] = await Promise.all([getOverview(row.filters), getAnalyticsLab(row.filters)]);
-      const snapshot = buildReportSnapshot(row.filters, overview, analytics);
+      const sourceSnapshot = await buildReportSourceSnapshot(row.filters);
+      const snapshot = sourceSnapshot.snapshot;
       const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-      const snapshotTimingMs = Date.now() - snapshotStartedAt;
 
       const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel, reportId);
       if (exactReady?.report) {
@@ -244,7 +274,8 @@ const scheduleReportGeneration = (reportId: string) => {
           completed: true,
           debugPatch: {
             timingMs: {
-              snapshotAssembly: snapshotTimingMs,
+              analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
+              snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
               total: Date.now() - overallStartedAt
             }
           }
@@ -259,12 +290,13 @@ const scheduleReportGeneration = (reportId: string) => {
         snapshot,
         debugPatch: {
           timingMs: {
-            snapshotAssembly: snapshotTimingMs
+            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
+            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly
           }
         }
       });
 
-      const modelResult = await reportClient.generateReport(snapshot);
+      const modelResult = await generateOperationalBriefing(snapshot);
 
       await updateReportPhase(reportId, {
         jobStatus: "generating",
@@ -273,7 +305,8 @@ const scheduleReportGeneration = (reportId: string) => {
         snapshot,
         debugPatch: {
           timingMs: {
-            snapshotAssembly: snapshotTimingMs,
+            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
+            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
             modelRequest: modelResult.timingMs.modelRequest,
             validation: modelResult.timingMs.validation
           }
@@ -289,7 +322,8 @@ const scheduleReportGeneration = (reportId: string) => {
         completed: true,
         debugPatch: {
           timingMs: {
-            snapshotAssembly: snapshotTimingMs,
+            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
+            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
             modelRequest: modelResult.timingMs.modelRequest,
             validation: modelResult.timingMs.validation,
             total: Date.now() - overallStartedAt
