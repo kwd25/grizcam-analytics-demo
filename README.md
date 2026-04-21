@@ -87,7 +87,9 @@ Local env behavior:
 - `OPENROUTER_API_KEY` stays server-only and is never exposed to the browser.
 - `OPENROUTER_MODEL` defaults to `anthropic/claude-sonnet-4.6` for Reports and can be swapped later without code changes.
 - `REPORT_PROMPT_VERSION` lets you invalidate cached reports when the prompt contract changes.
-- Set `REPORTS_DATABASE_URL` to a writable Postgres database for report jobs/cache. If it is not set, Reports stays disabled instead of failing the whole API.
+- `REPORTS_DATABASE_URL` is preferred for a dedicated writable reports database.
+- If `REPORTS_DATABASE_URL` is not set, Reports falls back to `DATABASE_URL` when that database is writable.
+- If the resolved reports database is read-only, Reports stays unavailable with a clear diagnostic instead of failing the whole API.
 - Leave `VITE_API_BASE_URL` empty for same-origin `/api` calls.
 - Set `VITE_API_BASE_URL=http://localhost:4000` only if you want the frontend to call a separately addressed local API directly instead of using the Vite proxy.
 
@@ -109,7 +111,7 @@ Suggested deployment setup:
 
 1. Create a managed Postgres database seeded with the synthetic 2025 tables.
 2. Create a read-only database user for analytics reads.
-3. Create a separate writable Postgres database or schema for report jobs/cache and run the reports migration there.
+3. Optional but recommended: create a separate writable Postgres database or schema for report jobs/cache. If you skip this, Reports will fall back to `DATABASE_URL` when it is writable.
 4. Link the repo to Vercel:
 
 ```bash
@@ -156,11 +158,14 @@ VITE_DEMO_LABEL=Synthetic data demo
 VITE_APP_TITLE=GrizCam Demo | Yellowstone 2025 Analytics
 ```
 
-5. Apply the reports migration to the writable reports database:
+5. Optional manual migration if you want to pre-create the reports table yourself:
 
 ```bash
 psql "$REPORTS_DATABASE_URL" -f apps/api/migrations/001_analytics_reports.sql
 ```
+
+The API now auto-ensures `analytics_reports` on startup for the active writable reports connection, so this step is optional for the demo deployment.
+If you are using `DATABASE_URL` as the reports fallback, run the SQL against that database instead.
 
 6. Deploy:
 
@@ -172,8 +177,10 @@ vercel deploy --prod
 Notes:
 
 - Leave `VITE_API_BASE_URL` empty on Vercel to use same-origin `/api`.
-- `DATABASE_URL` should remain read-only for analytics queries.
-- `REPORTS_DATABASE_URL` should point at a writable database for report cache/job state.
+- `DATABASE_URL` can remain read-only when you provide a separate writable `REPORTS_DATABASE_URL`.
+- If you want Reports to fall back to `DATABASE_URL`, that database must be writable.
+- `REPORTS_DATABASE_URL` should point at a writable database for report cache/job state when you want a dedicated reports store.
+- If `REPORTS_DATABASE_URL` is unset, `DATABASE_URL` is used for reports when it is writable.
 - CSV export is disabled by default for the public demo.
 - You can still use `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` locally if you do not want a local `DATABASE_URL`.
 - The production API expects `DATABASE_URL` and `ALLOWED_ORIGINS`.
@@ -253,8 +260,8 @@ The query page also includes a single-turn AI SQL helper. It sends a natural-lan
 - The backend queues report work first, then builds the analytics snapshot and computes the hash inside the background worker.
 - Exact hash matches reuse an already-ready report without another model call.
 - If the current filter key has an older ready report while a new snapshot is regenerating, the UI shows that stale report with a refresh indicator and current phase label.
-- Reports storage is separate from analytics reads and requires a writable database configured via `REPORTS_DATABASE_URL`.
-- The reports table is no longer created on live requests; apply the SQL migration at [`/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql`](/Users/kyle/grizcam/apps/api/migrations/001_analytics_reports.sql) to the writable reports database.
+- Reports storage prefers a separate writable database via `REPORTS_DATABASE_URL`, but can fall back to `DATABASE_URL` when that database is writable.
+- The API auto-ensures the reports table on startup for the active writable reports connection, and does not create it on every request.
 
 All chart and event endpoints accept the dashboard filter params:
 
@@ -277,7 +284,7 @@ All chart and event endpoints accept the dashboard filter params:
 - The API reads the existing database directly and does not mutate schema.
 - Event timestamps are exposed as Yellowstone-local wall-clock strings from the stored `timestamp` column.
 - The hosted demo uses synthetic data only and does not require login for v1.
-- Production deployments should use a read-only database credential.
+- Production deployments should use read-only analytics access unless they intentionally rely on writable `DATABASE_URL` as the reports fallback.
 
 ## Verification
 
@@ -287,7 +294,7 @@ All chart and event endpoints accept the dashboard filter params:
 ## Manager Demo Checklist
 
 - Hosted Postgres contains `events`, `dim_devices`, and `daily_camera_summary`
-- Demo API user is read-only
+- Demo API user is read-only unless you intentionally rely on writable `DATABASE_URL` for Reports fallback
 - Vercel env vars are set
 - `DEMO_EXPORTS_ENABLED=false`
 - The app opens with a polished default overview

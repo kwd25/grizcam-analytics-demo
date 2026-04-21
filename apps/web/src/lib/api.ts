@@ -18,6 +18,7 @@ import type {
   QueryExportFormat,
   QueryRunResponse,
   GetReportResponse,
+  ReportHealthResponse,
   ReportStatusResponse,
   TriggerReportResponse,
   SubjectCameraHeatmapPoint,
@@ -218,6 +219,7 @@ export const api = {
   daySummary: (date: string, filters: DashboardFilters) => fetchJson<DaySummaryResponse>(`/api/day/${date}/summary`, filters),
   events: (filters: EventQuery) => fetchJson<EventsResponse>("/api/events", filters),
   latestReport: (filters: DashboardFilters) => fetchJson<GetReportResponse>("/api/reports/latest", filters),
+  reportHealth: () => fetchJson<ReportHealthResponse>("/api/reports/health"),
   reportStatus: (filters: DashboardFilters) => fetchJson<ReportStatusResponse>("/api/reports/status", filters),
   triggerReportGeneration: (filters: DashboardFilters, force = false) =>
     postJson<TriggerReportResponse>("/api/reports/generate", { filters, force }),
