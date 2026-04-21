@@ -59,6 +59,11 @@ export const ReportsPage = () => {
   const stableFilters = useMemo(() => filters, [filters]);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
+  const healthQuery = useQuery({
+    queryKey: ["report-health"],
+    queryFn: api.reportHealth,
+    staleTime: 30_000
+  });
   const statusQuery = useQuery({
     queryKey: ["report-status", stableFilters],
     queryFn: () => api.reportStatus(stableFilters),
@@ -92,9 +97,11 @@ export const ReportsPage = () => {
       : prefetchState.phase !== "idle"
         ? prefetchState.phase
         : reportState?.phase ?? "idle";
-  const visibleReason = reportState?.reason ?? prefetchState.message;
+  const visibleReason = reportState?.reason ?? prefetchState.message ?? healthQuery.data?.reportsFailureReason ?? null;
   const isReportsDisabled = visibleStatus === "disabled" || visiblePhase === "disabled";
   const isRefreshing = reportState?.status === "stale" || regenerateMutation.isPending;
+  const isUsingDatabaseUrlFallback =
+    healthQuery.data?.reportsConnectionSource === "database_url" && !healthQuery.data?.reportsFailureReason;
 
   return (
     <AppShell
@@ -103,6 +110,12 @@ export const ReportsPage = () => {
       badge={`${appEnv.demoLabel} • Briefings`}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={patchFilters} onReset={resetFilters} />}
     >
+      {isUsingDatabaseUrlFallback ? (
+        <div className="rounded-3xl border border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100">
+          Reports are using `DATABASE_URL` because `REPORTS_DATABASE_URL` is unset.
+        </div>
+      ) : null}
+
       {prefetchState.status === "error" || prefetchState.status === "disabled" ? (
         <div className="rounded-3xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
           Background prefetch status: {prefetchState.message ?? phaseDescription[prefetchState.phase]}

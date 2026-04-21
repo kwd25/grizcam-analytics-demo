@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DashboardFilters, GetReportResponse, ReportPhase, ReportStatusResponse, TriggerReportResponse } from "@grizcam/shared";
 import { appConfig } from "../config.js";
-import { pool, reportsPool } from "../db.js";
+import { ensureReportsStoreReady, pool, reportsStoreReady } from "../db.js";
 import { getAnalyticsLab, getOverview } from "../queries/dashboard.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
 import { buildReportFilterKey, buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
@@ -11,7 +11,6 @@ import {
   findLatestByFilterKey,
   findLatestReadyByFilterKey,
   getReportById,
-  reportsStoreConfigured,
   toReportRecord,
   updateReportPhase,
   type StoredReportRow
@@ -20,7 +19,9 @@ import {
 const inflightReportIds = new Set<string>();
 const reportClient = createOpenRouterReportClient();
 
-const toDisabledResponse = (reason = "Reports are disabled because REPORTS_DATABASE_URL is not configured."): GetReportResponse => ({
+const toDisabledResponse = (
+  reason = "Reports are unavailable. Configure REPORTS_DATABASE_URL or use a writable DATABASE_URL for reports."
+): GetReportResponse => ({
   status: "disabled",
   cacheKey: null,
   phase: "disabled",
@@ -60,6 +61,44 @@ const phaseToViewStatus = (phase: ReportPhase) => {
     default:
       return "generating" as const;
   }
+};
+
+const getReportsStoreIssue = async () => {
+  const state = await ensureReportsStoreReady();
+
+  if (!state.configured) {
+    return {
+      status: "disabled" as const,
+      phase: "disabled" as const,
+      reason: state.failureReason ?? "Reports storage is unavailable. Configure REPORTS_DATABASE_URL or use a writable DATABASE_URL for reports."
+    };
+  }
+
+  if (!state.connected || state.databaseStatus === "unavailable") {
+    return {
+      status: "error" as const,
+      phase: "error" as const,
+      reason: state.failureReason ?? "Reports storage is unavailable right now."
+    };
+  }
+
+  if (state.readOnly) {
+    return {
+      status: "disabled" as const,
+      phase: "disabled" as const,
+      reason: state.failureReason ?? "Reports storage resolved to a read-only database."
+    };
+  }
+
+  if (!state.schemaReady || !reportsStoreReady()) {
+    return {
+      status: "error" as const,
+      phase: "error" as const,
+      reason: state.failureReason ?? "Reports storage is connected but not initialized yet."
+    };
+  }
+
+  return null;
 };
 
 export const selectLatestReportView = (input: {
@@ -230,8 +269,11 @@ const scheduleReportGeneration = (reportId: string) => {
 };
 
 export const getLatestReport = async (filters: DashboardFilters): Promise<GetReportResponse> => {
-  if (!reportsStoreConfigured()) {
-    return toDisabledResponse();
+  const reportsStoreIssue = await getReportsStoreIssue();
+  if (reportsStoreIssue) {
+    return reportsStoreIssue.status === "disabled"
+      ? toDisabledResponse(reportsStoreIssue.reason)
+      : toErrorResponse(reportsStoreIssue.reason);
   }
 
   try {
@@ -251,15 +293,28 @@ export const getLatestReport = async (filters: DashboardFilters): Promise<GetRep
 };
 
 export const triggerReportGeneration = async (filters: DashboardFilters, force = false): Promise<TriggerReportResponse> => {
-  if (!reportsStoreConfigured()) {
+  const reportsStoreIssue = await getReportsStoreIssue();
+  if (reportsStoreIssue) {
     return {
-      status: "disabled",
-      phase: "disabled",
+      status: reportsStoreIssue.status,
+      phase: reportsStoreIssue.phase,
       cacheKey: null,
       reportId: "disabled",
       isExactMatch: false,
       report: null,
-      reason: "Reports are disabled because REPORTS_DATABASE_URL is not configured."
+      reason: reportsStoreIssue.reason
+    };
+  }
+
+  if (!appConfig.openRouterApiKey) {
+    return {
+      status: "error",
+      phase: "error",
+      cacheKey: null,
+      reportId: "unavailable",
+      isExactMatch: false,
+      report: null,
+      reason: "Report generation is unavailable because OPENROUTER_API_KEY is not configured on the server."
     };
   }
 
@@ -352,6 +407,7 @@ export const getReportStatus = async (filters: DashboardFilters): Promise<Report
 };
 
 export const getReportsHealth = async () => {
+  const reportsState = await ensureReportsStoreReady();
   const analyticsHealth = await pool
     .query("select current_setting('transaction_read_only') as read_only")
     .then((result) => ({
@@ -363,28 +419,15 @@ export const getReportsHealth = async () => {
       readOnly: null
     }));
 
-  const reportsHealth = !reportsPool
-    ? {
-        status: "disabled",
-        readOnly: null
-      }
-    : await reportsPool
-        .query("select current_setting('transaction_read_only') as read_only")
-        .then((result) => ({
-          status: "ok",
-          readOnly: String(result.rows[0]?.read_only) === "on"
-        }))
-        .catch(() => ({
-          status: "unavailable",
-          readOnly: null
-        }));
-
   return {
     analyticsDatabase: analyticsHealth.status,
     analyticsDatabaseReadOnly: analyticsHealth.readOnly,
-    reportsDatabase: reportsHealth.status,
-    reportsDatabaseReadOnly: reportsHealth.readOnly,
+    reportsDatabase: reportsState.databaseStatus,
+    reportsDatabaseReadOnly: reportsState.readOnly,
+    reportsConnectionSource: reportsState.connectionSource,
+    reportsSchemaReady: reportsState.schemaReady,
+    reportsFailureReason: reportsState.failureReason,
     openRouterConfigured: Boolean(appConfig.openRouterApiKey),
-    reportsEnabled: reportsStoreConfigured()
+    reportsEnabled: reportsStoreReady()
   };
 };

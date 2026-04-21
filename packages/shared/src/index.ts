@@ -576,6 +576,14 @@ export type ReportPhase = z.infer<typeof reportPhaseSchema>;
 export const reportViewStatusSchema = z.enum(["idle", "disabled", "generating", "ready", "stale", "error"]);
 export type ReportViewStatus = z.infer<typeof reportViewStatusSchema>;
 
+export const reportConnectionSourceSchema = z.enum([
+  "reports_database_url",
+  "database_url",
+  "local_postgres",
+  "unconfigured"
+]);
+export type ReportConnectionSource = z.infer<typeof reportConnectionSourceSchema>;
+
 export const reportDebugSchema = z.object({
   lastErrorCode: z.string().nullable().optional(),
   lastErrorMessage: z.string().nullable().optional(),
@@ -684,6 +692,19 @@ export const reportStatusResponseSchema = z.object({
   stale: reportRecordSchema.nullable().optional()
 });
 export type ReportStatusResponse = z.infer<typeof reportStatusResponseSchema>;
+
+export const reportHealthResponseSchema = z.object({
+  analyticsDatabase: z.string(),
+  analyticsDatabaseReadOnly: z.boolean().nullable(),
+  reportsDatabase: z.enum(["ok", "disabled", "unavailable"]),
+  reportsDatabaseReadOnly: z.boolean().nullable(),
+  reportsConnectionSource: reportConnectionSourceSchema,
+  reportsSchemaReady: z.boolean(),
+  reportsFailureReason: z.string().nullable().optional(),
+  openRouterConfigured: z.boolean(),
+  reportsEnabled: z.boolean()
+});
+export type ReportHealthResponse = z.infer<typeof reportHealthResponseSchema>;
 
 export type QueryColumnType = "text" | "number" | "date" | "timestamp" | "boolean" | "json";
 

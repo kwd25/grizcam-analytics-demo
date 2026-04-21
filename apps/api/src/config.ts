@@ -28,6 +28,43 @@ const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : isProd
 const databaseUrl = process.env.DATABASE_URL;
 const reportsDatabaseUrl = process.env.REPORTS_DATABASE_URL;
 const demoExportsEnabled = process.env.DEMO_EXPORTS_ENABLED ?? process.env.ENABLE_EVENT_EXPORTS;
+const defaultPostgresConfig = {
+  host: process.env.PGHOST ?? "localhost",
+  port: parseNumber(process.env.PGPORT, 5432),
+  database: process.env.PGDATABASE ?? "grizcam_synthetic_2025",
+  user: process.env.PGUSER ?? process.env.USER ?? "postgres",
+  password: process.env.PGPASSWORD ?? ""
+};
+
+const postgres = databaseUrl
+  ? {
+      connectionString: databaseUrl,
+      ssl: isProduction ? { rejectUnauthorized: false } : undefined
+    }
+  : defaultPostgresConfig;
+
+const reportsConnectionSource = reportsDatabaseUrl
+  ? "reports_database_url"
+  : databaseUrl
+    ? "database_url"
+    : !isProduction
+      ? "local_postgres"
+      : "unconfigured";
+
+const reportsPostgres =
+  reportsConnectionSource === "reports_database_url"
+    ? {
+        connectionString: reportsDatabaseUrl,
+        ssl: isProduction ? { rejectUnauthorized: false } : undefined
+      }
+    : reportsConnectionSource === "database_url"
+      ? {
+          connectionString: databaseUrl,
+          ssl: isProduction ? { rejectUnauthorized: false } : undefined
+        }
+      : reportsConnectionSource === "local_postgres"
+        ? defaultPostgresConfig
+        : null;
 
 if (isProduction && !databaseUrl) {
   throw new Error("DATABASE_URL is required in production.");
@@ -46,28 +83,13 @@ export const appConfig = {
   openRouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
   openRouterModel: process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4.6",
   reportPromptVersion: process.env.REPORT_PROMPT_VERSION ?? "v1",
-  reportsEnabled: Boolean(reportsDatabaseUrl),
+  reportsEnabled: Boolean(reportsPostgres),
+  reportsConnectionSource,
   apiRateLimit: {
     windowMs: parseNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 60_000),
     max: parseNumber(process.env.API_RATE_LIMIT_MAX, 120)
   },
   exportsEnabled: parseBoolean(demoExportsEnabled, false),
-  postgres: databaseUrl
-    ? {
-        connectionString: databaseUrl,
-        ssl: isProduction ? { rejectUnauthorized: false } : undefined
-      }
-    : {
-        host: process.env.PGHOST ?? "localhost",
-        port: parseNumber(process.env.PGPORT, 5432),
-        database: process.env.PGDATABASE ?? "grizcam_synthetic_2025",
-        user: process.env.PGUSER ?? process.env.USER ?? "postgres",
-        password: process.env.PGPASSWORD ?? ""
-      },
-  reportsPostgres: reportsDatabaseUrl
-    ? {
-        connectionString: reportsDatabaseUrl,
-        ssl: isProduction ? { rejectUnauthorized: false } : undefined
-      }
-    : null
+  postgres,
+  reportsPostgres
 };
