@@ -701,6 +701,7 @@ export const reportHealthResponseSchema = z.object({
   reportsConnectionSource: reportConnectionSourceSchema,
   reportsSchemaReady: z.boolean(),
   reportsFailureReason: z.string().nullable().optional(),
+  supportsEphemeralGeneration: z.boolean(),
   openRouterConfigured: z.boolean(),
   reportsEnabled: z.boolean()
 });
