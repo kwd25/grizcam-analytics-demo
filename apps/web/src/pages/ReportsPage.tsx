@@ -137,6 +137,7 @@ export const ReportsPage = () => {
   const visiblePhase = generateMutation.isPending ? "calling_model" : reportPhase;
   const visibleReason = reportReason ?? (!healthQuery.data?.openRouterConfigured ? "OPENROUTER_API_KEY is not configured on the server." : null);
   const timingMs = generatedReport?.debug?.timingMs ?? {};
+  const generatedBriefing = generatedReport?.report ?? null;
   const timingEntries = [
     ["Input load", inputLoadMs],
     ["Model request", timingMs.modelRequest],
@@ -180,10 +181,10 @@ export const ReportsPage = () => {
             </button>
           }
         />
-      ) : generatedReport?.report ? (
+      ) : generatedBriefing ? (
         <>
           <SectionCard
-            title={generatedReport.report.headline}
+            title={generatedBriefing.headline}
             subtitle={`${snapshot?.dateRange.startDate ?? ""} to ${snapshot?.dateRange.endDate ?? ""} • ${snapshot?.filters.camera_name.length || "All"} camera scope`}
             actions={
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -201,7 +202,7 @@ export const ReportsPage = () => {
           >
             <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
               <div className="space-y-3">
-                {generatedReport.report.executive_summary.map((item) => (
+                {generatedBriefing.executive_summary.map((item) => (
                   <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-200">
                     {item}
                   </div>
@@ -231,7 +232,7 @@ export const ReportsPage = () => {
           <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
             <SectionCard title="Key Findings" subtitle="Grounded observations with evidence and explicit actionability.">
               <div className="space-y-3">
-                {generatedReport.report.key_findings.map((finding) => (
+                {generatedBriefing.key_findings.map((finding) => (
                   <div key={finding.title} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold text-white">{finding.title}</div>
@@ -252,7 +253,7 @@ export const ReportsPage = () => {
 
             <SectionCard title="Recommended Actions" subtitle="Prioritized next steps for an operator or manager.">
               <div className="space-y-3">
-                {generatedReport.report.recommended_actions.map((item) => (
+                {generatedBriefing.recommended_actions.map((item) => (
                   <div key={`${item.priority}-${item.action}`} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-400/15 text-sm font-semibold text-emerald-100">
@@ -270,8 +271,8 @@ export const ReportsPage = () => {
           <div className="grid gap-4 xl:grid-cols-2">
             <SectionCard title="Risks And Watchouts" subtitle="Operational concerns to keep on the radar.">
               <div className="space-y-3">
-                {generatedReport.report.risks_or_watchouts.length > 0 ? (
-                  generatedReport.report.risks_or_watchouts.map((item) => (
+                {generatedBriefing.risks_or_watchouts.length > 0 ? (
+                  generatedBriefing.risks_or_watchouts.map((item) => (
                     <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                       <div className="text-sm font-semibold text-white">{item.title}</div>
                       <div className="mt-2 text-sm leading-6 text-slate-300">{item.impact}</div>
@@ -286,8 +287,8 @@ export const ReportsPage = () => {
 
             <SectionCard title="Open Questions" subtitle="Unknowns worth resolving before stronger action is taken.">
               <div className="space-y-3">
-                {generatedReport.report.open_questions.length > 0 ? (
-                  generatedReport.report.open_questions.map((item) => (
+                {generatedBriefing.open_questions.length > 0 ? (
+                  generatedBriefing.open_questions.map((item) => (
                     <div key={item} className="rounded-2xl bg-white/5 px-4 py-3 text-sm leading-6 text-slate-300">
                       {item}
                     </div>
