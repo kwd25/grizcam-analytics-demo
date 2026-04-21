@@ -262,6 +262,8 @@ The query page also includes a single-turn AI SQL helper. It sends a natural-lan
 - If the current filter key has an older ready report while a new snapshot is regenerating, the UI shows that stale report with a refresh indicator and current phase label.
 - Reports storage prefers a separate writable database via `REPORTS_DATABASE_URL`, but can fall back to `DATABASE_URL` when that database is writable.
 - The API auto-ensures the reports table on startup for the active writable reports connection, and does not create it on every request.
+- If persistent reports storage is unavailable, the Reports page can still generate the first report on demand without saving it.
+- In that fallback mode, reports are not retained across refreshes or serverless cold starts and background prefetch is disabled.
 
 All chart and event endpoints accept the dashboard filter params:
 

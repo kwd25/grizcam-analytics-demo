@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReportRecord, ReportStatusResponse } from "@grizcam/shared";
 import type { ReportPhase, ReportViewStatus } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { FilterBar } from "../components/FilterBar";
@@ -57,6 +58,10 @@ export const ReportsPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
   const prefetchState = useReportPrefetch(filters);
   const stableFilters = useMemo(() => filters, [filters]);
+  const [ephemeralReport, setEphemeralReport] = useState<ReportRecord | null>(null);
+  const [ephemeralStatus, setEphemeralStatus] = useState<ReportViewStatus>("idle");
+  const [ephemeralPhase, setEphemeralPhase] = useState<ReportPhase>("idle");
+  const [ephemeralReason, setEphemeralReason] = useState<string | null>(null);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
   const healthQuery = useQuery({
@@ -67,6 +72,7 @@ export const ReportsPage = () => {
   const statusQuery = useQuery({
     queryKey: ["report-status", stableFilters],
     queryFn: () => api.reportStatus(stableFilters),
+    enabled: healthQuery.data?.reportsEnabled !== false,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === "generating" || status === "stale" ? 2000 : false;
@@ -75,12 +81,49 @@ export const ReportsPage = () => {
 
   const regenerateMutation = useMutation({
     mutationFn: () => api.triggerReportGeneration(stableFilters, true),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if (healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration) {
+        setEphemeralReport(result.report ?? null);
+        setEphemeralStatus(result.status);
+        setEphemeralPhase(result.phase);
+        setEphemeralReason(result.reason ?? null);
+        return;
+      }
       await statusQuery.refetch();
     }
   });
+  const triggerRegenerate = regenerateMutation.mutate;
 
-  const reportState = statusQuery.data;
+  const isEphemeralMode = healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration;
+
+  useEffect(() => {
+    setEphemeralReport(null);
+    setEphemeralStatus("idle");
+    setEphemeralPhase("idle");
+    setEphemeralReason(null);
+  }, [stableFilters]);
+
+  useEffect(() => {
+    if (!isEphemeralMode || regenerateMutation.isPending || ephemeralReport) {
+      return;
+    }
+
+    setEphemeralStatus("generating");
+    setEphemeralPhase("calling_model");
+    setEphemeralReason(null);
+    triggerRegenerate();
+  }, [ephemeralReport, isEphemeralMode, regenerateMutation.isPending, triggerRegenerate]);
+
+  const reportState: ReportStatusResponse | undefined = isEphemeralMode
+    ? {
+        status: regenerateMutation.isPending ? "generating" : ephemeralStatus,
+        cacheKey: ephemeralReport?.snapshotHash ?? null,
+        phase: regenerateMutation.isPending ? "calling_model" : ephemeralPhase,
+        reason: ephemeralReason ?? (ephemeralStatus === "idle" ? healthQuery.data?.reportsFailureReason ?? null : null),
+        current: ephemeralReport,
+        stale: null
+      }
+    : statusQuery.data;
   const displayRecord = reportState?.status === "stale" ? reportState.stale ?? reportState.current : reportState?.current;
   const statusRecord = reportState?.current ?? displayRecord;
   const snapshot = displayRecord?.snapshot;
@@ -122,9 +165,9 @@ export const ReportsPage = () => {
         </div>
       ) : null}
 
-      {!reportState && statusQuery.isLoading ? (
+      {!reportState && (statusQuery.isLoading || healthQuery.isLoading) ? (
         <QueryState title="Preparing operational briefing" detail="Checking the reports store and current generation status for this filter state." />
-      ) : statusQuery.error ? (
+      ) : statusQuery.error && !isEphemeralMode ? (
         <QueryState
           title="Report service unavailable"
           detail={(statusQuery.error as Error).message || "The reports endpoint returned an unexpected response."}
@@ -369,7 +412,14 @@ export const ReportsPage = () => {
         />
       )}
 
-      <SectionCard title="Generation Status" subtitle="Current backend phase and any available diagnostics for this filter state.">
+      <SectionCard
+        title="Generation Status"
+        subtitle={
+          isEphemeralMode
+            ? "Current request diagnostics for on-demand report generation."
+            : "Current backend phase and any available diagnostics for this filter state."
+        }
+      >
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-white/5 p-4">
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</div>

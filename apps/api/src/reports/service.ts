@@ -18,6 +18,7 @@ import {
 
 const inflightReportIds = new Set<string>();
 const reportClient = createOpenRouterReportClient();
+const supportsEphemeralGeneration = () => Boolean(appConfig.openRouterApiKey);
 
 const toDisabledResponse = (
   reason = "Reports are unavailable. Configure REPORTS_DATABASE_URL or use a writable DATABASE_URL for reports."
@@ -99,6 +100,56 @@ const getReportsStoreIssue = async () => {
   }
 
   return null;
+};
+
+const generateEphemeralReport = async (filters: DashboardFilters) => {
+  const overallStartedAt = Date.now();
+  const snapshotStartedAt = Date.now();
+  const [overview, analytics] = await Promise.all([getOverview(filters), getAnalyticsLab(filters)]);
+  const snapshot = buildReportSnapshot(filters, overview, analytics);
+  const filterKey = buildReportFilterKey(filters);
+  const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
+  const snapshotTimingMs = Date.now() - snapshotStartedAt;
+  const modelResult = await reportClient.generateReport(snapshot);
+  const completedAt = new Date().toISOString();
+
+  return {
+    status: "ready" as const,
+    phase: "ready" as const,
+    cacheKey: snapshotHash,
+    reportId: `ephemeral:${filterKey}`,
+    isExactMatch: false,
+    report: {
+      id: `ephemeral:${filterKey}`,
+      normalizedFilterKey: filterKey,
+      snapshotHash,
+      promptVersion: appConfig.reportPromptVersion,
+      model: appConfig.openRouterModel,
+      jobStatus: "ready" as const,
+      viewStatus: "ready" as const,
+      isRefreshing: false,
+      isExactMatch: false,
+      phase: "ready" as const,
+      generatedAt: completedAt,
+      updatedAt: completedAt,
+      startedAt: new Date(overallStartedAt).toISOString(),
+      completedAt,
+      error: null,
+      report: modelResult.report,
+      snapshot,
+      debug: {
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        timingMs: {
+          snapshotAssembly: snapshotTimingMs,
+          modelRequest: modelResult.timingMs.modelRequest,
+          validation: modelResult.timingMs.validation,
+          total: Date.now() - overallStartedAt
+        }
+      }
+    },
+    reason: null
+  };
 };
 
 export const selectLatestReportView = (input: {
@@ -271,9 +322,12 @@ const scheduleReportGeneration = (reportId: string) => {
 export const getLatestReport = async (filters: DashboardFilters): Promise<GetReportResponse> => {
   const reportsStoreIssue = await getReportsStoreIssue();
   if (reportsStoreIssue) {
-    return reportsStoreIssue.status === "disabled"
-      ? toDisabledResponse(reportsStoreIssue.reason)
-      : toErrorResponse(reportsStoreIssue.reason);
+    return {
+      ...toIdleResponse(),
+      reason: supportsEphemeralGeneration()
+        ? "Persistent report storage is unavailable; report generation will run on demand when you open Reports."
+        : reportsStoreIssue.reason
+    };
   }
 
   try {
@@ -295,6 +349,23 @@ export const getLatestReport = async (filters: DashboardFilters): Promise<GetRep
 export const triggerReportGeneration = async (filters: DashboardFilters, force = false): Promise<TriggerReportResponse> => {
   const reportsStoreIssue = await getReportsStoreIssue();
   if (reportsStoreIssue) {
+    if (supportsEphemeralGeneration()) {
+      try {
+        return await generateEphemeralReport(filters);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Report generation failed.";
+        return {
+          status: "error",
+          phase: "error",
+          cacheKey: null,
+          reportId: "ephemeral:error",
+          isExactMatch: false,
+          report: null,
+          reason: message
+        };
+      }
+    }
+
     return {
       status: reportsStoreIssue.status,
       phase: reportsStoreIssue.phase,
@@ -395,6 +466,20 @@ export const triggerReportGeneration = async (filters: DashboardFilters, force =
 };
 
 export const getReportStatus = async (filters: DashboardFilters): Promise<ReportStatusResponse> => {
+  const reportsStoreIssue = await getReportsStoreIssue();
+  if (reportsStoreIssue) {
+    return {
+      status: "idle",
+      cacheKey: null,
+      phase: "idle",
+      reason: supportsEphemeralGeneration()
+        ? "Persistent report storage is unavailable; generate a report on demand from the Reports page."
+        : reportsStoreIssue.reason,
+      current: null,
+      stale: null
+    };
+  }
+
   const latest = await getLatestReport(filters);
   return {
     status: latest.status,
@@ -427,6 +512,7 @@ export const getReportsHealth = async () => {
     reportsConnectionSource: reportsState.connectionSource,
     reportsSchemaReady: reportsState.schemaReady,
     reportsFailureReason: reportsState.failureReason,
+    supportsEphemeralGeneration: supportsEphemeralGeneration(),
     openRouterConfigured: Boolean(appConfig.openRouterApiKey),
     reportsEnabled: reportsStoreReady()
   };

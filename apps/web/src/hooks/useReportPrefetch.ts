@@ -32,28 +32,52 @@ export const useReportPrefetch = (filters: DashboardFilters) => {
   const [state, setState] = useState<PrefetchState>(defaultState);
 
   useEffect(() => {
-    const nextKey = serializeFilters(debouncedFilters);
-    if (!nextKey || lastTriggeredKey.current === nextKey) {
-      return;
-    }
+    let cancelled = false;
 
-    lastTriggeredKey.current = nextKey;
-    setState({
-      status: "generating",
-      phase: "queued",
-      message: null
-    });
+    const run = async () => {
+      const nextKey = serializeFilters(debouncedFilters);
+      if (!nextKey || lastTriggeredKey.current === nextKey) {
+        return;
+      }
 
-    void api
-      .triggerReportGeneration(debouncedFilters)
-      .then((result) => {
+      lastTriggeredKey.current = nextKey;
+
+      try {
+        const health = await api.reportHealth();
+        if (cancelled) {
+          return;
+        }
+
+        if (!health.reportsEnabled && health.supportsEphemeralGeneration) {
+          setState({
+            status: "idle",
+            phase: "idle",
+            message: "Background prefetch is disabled because reports are running in on-demand mode."
+          });
+          return;
+        }
+
+        setState({
+          status: "generating",
+          phase: "queued",
+          message: null
+        });
+
+        const result = await api.triggerReportGeneration(debouncedFilters);
+        if (cancelled) {
+          return;
+        }
+
         setState({
           status: result.status,
           phase: result.phase,
           message: result.reason ?? null
         });
-      })
-      .catch((error) => {
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
         const message =
           error instanceof QueryRequestError
             ? error.message
@@ -66,7 +90,14 @@ export const useReportPrefetch = (filters: DashboardFilters) => {
           phase: "error",
           message
         });
-      });
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [debouncedFilters]);
 
   return state;
