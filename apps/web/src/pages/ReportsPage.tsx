@@ -34,10 +34,10 @@ const phaseLabel: Record<ReportPhase, string> = {
 
 const phaseDescription: Record<ReportPhase, string> = {
   idle: "No report job has been created for this filter state yet.",
-  disabled: "Reports storage is not configured, so the feature is unavailable until a writable reports database is connected.",
+  disabled: "Persistent report storage is unavailable. The Reports page can still generate an on-demand briefing when model access is configured.",
   queued: "The report job has been accepted and is waiting to start.",
-  building_snapshot: "The API is collecting existing analytics aggregates and shaping the compact snapshot for the report.",
-  calling_model: "The report snapshot is ready and the briefing is being generated through OpenRouter.",
+  building_snapshot: "Preparing a compact analytics snapshot from the existing Overview, Ops, and Advanced data sources.",
+  calling_model: "Sending the compact analytics snapshot to OpenRouter to generate the briefing.",
   validating_response: "The model response is being validated and repaired into the required JSON shape if needed.",
   ready: "The latest report for this filter state is ready.",
   error: "The latest report attempt failed."
@@ -90,6 +90,14 @@ export const ReportsPage = () => {
         return;
       }
       await statusQuery.refetch();
+    },
+    onError: (error) => {
+      if (healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration) {
+        setEphemeralReport(null);
+        setEphemeralStatus("error");
+        setEphemeralPhase("error");
+        setEphemeralReason(error instanceof Error ? error.message : "Report generation failed.");
+      }
     }
   });
   const triggerRegenerate = regenerateMutation.mutate;
@@ -104,15 +112,34 @@ export const ReportsPage = () => {
   }, [stableFilters]);
 
   useEffect(() => {
-    if (!isEphemeralMode || regenerateMutation.isPending || ephemeralReport) {
+    if (!isEphemeralMode || regenerateMutation.isPending || ephemeralReport || ephemeralStatus !== "idle") {
       return;
     }
 
     setEphemeralStatus("generating");
-    setEphemeralPhase("calling_model");
+    setEphemeralPhase("building_snapshot");
     setEphemeralReason(null);
     triggerRegenerate();
-  }, [ephemeralReport, isEphemeralMode, regenerateMutation.isPending, triggerRegenerate]);
+  }, [ephemeralReport, ephemeralStatus, isEphemeralMode, regenerateMutation.isPending, triggerRegenerate]);
+
+  useEffect(() => {
+    if (!isEphemeralMode || !regenerateMutation.isPending) {
+      return;
+    }
+
+    const modelTimer = window.setTimeout(() => {
+      setEphemeralPhase((current) => (current === "building_snapshot" ? "calling_model" : current));
+    }, 1200);
+
+    const validationTimer = window.setTimeout(() => {
+      setEphemeralPhase((current) => (current === "calling_model" ? "validating_response" : current));
+    }, 6500);
+
+    return () => {
+      window.clearTimeout(modelTimer);
+      window.clearTimeout(validationTimer);
+    };
+  }, [isEphemeralMode, regenerateMutation.isPending]);
 
   const reportState: ReportStatusResponse | undefined = isEphemeralMode
     ? {
@@ -140,11 +167,19 @@ export const ReportsPage = () => {
       : prefetchState.phase !== "idle"
         ? prefetchState.phase
         : reportState?.phase ?? "idle";
-  const visibleReason = reportState?.reason ?? prefetchState.message ?? healthQuery.data?.reportsFailureReason ?? null;
+  const visibleReason = reportState?.reason ?? healthQuery.data?.reportsFailureReason ?? null;
   const isReportsDisabled = visibleStatus === "disabled" || visiblePhase === "disabled";
   const isRefreshing = reportState?.status === "stale" || regenerateMutation.isPending;
   const isUsingDatabaseUrlFallback =
     healthQuery.data?.reportsConnectionSource === "database_url" && !healthQuery.data?.reportsFailureReason;
+  const timingMs = statusRecord?.debug?.timingMs ?? {};
+  const timingEntries = [
+    ["Analytics fetch", timingMs.analyticsFetch],
+    ["Snapshot assembly", timingMs.snapshotAssembly],
+    ["Model request", timingMs.modelRequest],
+    ["Validation", timingMs.validation],
+    ["Total", timingMs.total]
+  ].filter((entry): entry is [string, number] => typeof entry[1] === "number");
 
   return (
     <AppShell
@@ -166,7 +201,7 @@ export const ReportsPage = () => {
       ) : null}
 
       {!reportState && (statusQuery.isLoading || healthQuery.isLoading) ? (
-        <QueryState title="Preparing operational briefing" detail="Checking the reports store and current generation status for this filter state." />
+        <QueryState title="Preparing operational briefing" detail="Checking storage mode and deciding whether to use cached or on-demand report generation." />
       ) : statusQuery.error && !isEphemeralMode ? (
         <QueryState
           title="Report service unavailable"
@@ -326,6 +361,18 @@ export const ReportsPage = () => {
               <SectionCard title="Why The Model Said This" subtitle="Compact evidence bundle selected from existing analytics, not raw event dumps.">
                 <div className="space-y-4">
                   <div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Overview Highlights</div>
+                    <div className="mt-2 space-y-2">
+                      {snapshot.overviewHighlights.map((item) => (
+                        <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                          <div className="text-sm font-medium text-white">{item.name}</div>
+                          <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
                     <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Pipeline</div>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {snapshot.pipeline.map((item) => (
@@ -357,6 +404,29 @@ export const ReportsPage = () => {
 
               <SectionCard title="Operational Signals" subtitle="Top movers, at-risk cameras, and trend notes selected for the report prompt.">
                 <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Ops Highlights</div>
+                    {snapshot.opsHighlights.map((item) => (
+                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-white">{item.name}</div>
+                          {item.status ? <div className="text-xs uppercase tracking-[0.14em] text-amber-200">{titleCase(item.status)}</div> : null}
+                        </div>
+                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Advanced Highlights</div>
+                    {snapshot.advancedHighlights.map((item) => (
+                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                        <div className="text-sm font-medium text-white">{item.name}</div>
+                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+
                   <div className="space-y-2">
                     <div className="text-xs uppercase tracking-[0.16em] text-slate-400">At-Risk Cameras</div>
                     {(snapshot.atRiskCameras.length > 0 ? snapshot.atRiskCameras : snapshot.topCameras).map((item) => (
@@ -416,7 +486,7 @@ export const ReportsPage = () => {
         title="Generation Status"
         subtitle={
           isEphemeralMode
-            ? "Current request diagnostics for on-demand report generation."
+            ? "Current request diagnostics for direct on-demand report generation."
             : "Current backend phase and any available diagnostics for this filter state."
         }
       >
@@ -438,6 +508,17 @@ export const ReportsPage = () => {
             <div className="mt-2 text-sm text-white">{statusRecord?.debug?.lastErrorMessage ?? visibleReason ?? "None"}</div>
           </div>
         </div>
+
+        {timingEntries.length > 0 ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            {timingEntries.map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
+                <div className="mt-2 text-lg font-semibold text-white">{formatNumber(value, 0)}ms</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </SectionCard>
 
       {snapshot ? (

@@ -40,6 +40,7 @@ export class QueryRequestError extends Error {
 }
 
 const QUERY_REQUEST_TIMEOUT_MS = 10_000;
+const REPORT_REQUEST_TIMEOUT_MS = 60_000;
 
 const isStructuredQueryResponse = (payload: unknown): payload is { issues: unknown[] } => {
   if (!payload || typeof payload !== "object") {
@@ -127,9 +128,9 @@ const postQueryJson = async <T>(path: string, body: unknown): Promise<T> => {
   }
 };
 
-const postJson = async <T>(path: string, body: unknown): Promise<T> => {
+const postJson = async <T>(path: string, body: unknown, timeoutMs = QUERY_REQUEST_TIMEOUT_MS): Promise<T> => {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), QUERY_REQUEST_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${appEnv.apiBaseUrl}${path}`, {
@@ -157,7 +158,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
       throw error;
     }
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new QueryRequestError("TIMEOUT", "The request took longer than 10 seconds and was stopped.");
+      throw new QueryRequestError("TIMEOUT", `The request took longer than ${Math.round(timeoutMs / 1000)} seconds and was stopped.`);
     }
     throw new QueryRequestError("NETWORK", "The service is unreachable right now. Please retry in a moment.");
   } finally {
@@ -222,7 +223,7 @@ export const api = {
   reportHealth: () => fetchJson<ReportHealthResponse>("/api/reports/health"),
   reportStatus: (filters: DashboardFilters) => fetchJson<ReportStatusResponse>("/api/reports/status", filters),
   triggerReportGeneration: (filters: DashboardFilters, force = false) =>
-    postJson<TriggerReportResponse>("/api/reports/generate", { filters, force }),
+    postJson<TriggerReportResponse>("/api/reports/generate", { filters, force }, REPORT_REQUEST_TIMEOUT_MS),
   queryMetadata: () => fetchJson<QueryMetadataResponse>("/api/query/metadata"),
   generateQuerySql: (prompt: string) => postQueryJson<GenerateSqlResponse>("/api/query/generate-sql", { prompt }),
   queryFollowUp: (body: QueryFollowUpRequest) => postQueryJson<QueryFollowUpResponse>("/api/query/follow-up", body),

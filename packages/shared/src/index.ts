@@ -584,6 +584,9 @@ export const reportConnectionSourceSchema = z.enum([
 ]);
 export type ReportConnectionSource = z.infer<typeof reportConnectionSourceSchema>;
 
+export const reportSourceModeSchema = z.enum(["persistent", "ephemeral"]);
+export type ReportSourceMode = z.infer<typeof reportSourceModeSchema>;
+
 export const reportDebugSchema = z.object({
   lastErrorCode: z.string().nullable().optional(),
   lastErrorMessage: z.string().nullable().optional(),
@@ -623,9 +626,12 @@ export const reportSnapshotSummarySchema = z.object({
     endDate: z.string()
   }),
   overviewMetrics: z.array(reportSnapshotMetricSchema).max(12),
+  overviewHighlights: z.array(reportSnapshotItemSchema).max(6),
   pipeline: z.array(reportSnapshotMetricSchema).max(8),
+  opsHighlights: z.array(reportSnapshotItemSchema).max(6),
   topCameras: z.array(reportSnapshotItemSchema).max(6),
   atRiskCameras: z.array(reportSnapshotItemSchema).max(6),
+  advancedHighlights: z.array(reportSnapshotItemSchema).max(6),
   notableShifts: z.array(reportSnapshotItemSchema).max(6),
   anomalies: z.array(reportSnapshotItemSchema).max(6),
   trends: z.array(reportSnapshotTrendSchema).max(8),
@@ -637,6 +643,7 @@ export type ReportSnapshotSummary = z.infer<typeof reportSnapshotSummarySchema>;
 export const reportRecordSchema = z.object({
   id: z.string().min(1),
   normalizedFilterKey: z.string().min(1),
+  sourceMode: reportSourceModeSchema.default("persistent"),
   snapshotHash: z.string().nullable().optional(),
   promptVersion: z.string().min(1),
   model: z.string().min(1),

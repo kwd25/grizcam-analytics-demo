@@ -2,13 +2,26 @@ import { createHash } from "node:crypto";
 import type {
   AnalyticsLabResponse,
   CameraHealthRow,
+  CompositionPoint,
+  DailyActivityPoint,
   DashboardFilters,
   OverviewResponse,
   ReportSnapshotItem,
   ReportSnapshotMetric,
   ReportSnapshotSummary,
-  ReportSnapshotTrend
+  ReportSnapshotTrend,
+  SubjectCameraHeatmapPoint,
+  TimeOfDayCompositionPoint
 } from "@grizcam/shared";
+
+const SNAPSHOT_BUDGET = {
+  metrics: 9,
+  highlights: 5,
+  cameras: 5,
+  trends: 6,
+  caveats: 6,
+  narrative: 6
+} as const;
 
 const round = (value: number | null | undefined, digits = 1) => {
   if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -72,6 +85,8 @@ const describeCamera = (camera: CameraHealthRow): string => {
   return details.join(" • ");
 };
 
+const formatShareNote = (count: number, total: number) => (total > 0 ? `${round((count / total) * 100, 1)}% share` : "0% share");
+
 const compareRecentWindow = (values: number[]) => {
   if (values.length < 2) {
     return { deltaPct: null, direction: "flat" as const };
@@ -103,7 +118,7 @@ const buildPipelineMetrics = (overview: OverviewResponse): ReportSnapshotMetric[
     { label: "Uploaded conversion", value: ratio(uploaded, captured), unit: "%", note: `${captured - uploaded} groups dropped before upload.` },
     { label: "JSON conversion", value: ratio(jsonProcessed, uploaded), unit: "%", note: `${uploaded - jsonProcessed} groups dropped before JSON extraction.` },
     { label: "AI conversion", value: ratio(aiProcessed, jsonProcessed), unit: "%", note: `${jsonProcessed - aiProcessed} groups dropped before AI summary.` }
-  ];
+  ].slice(0, SNAPSHOT_BUDGET.metrics);
 };
 
 const buildTrends = (overview: OverviewResponse): ReportSnapshotTrend[] => {
@@ -154,7 +169,7 @@ const buildTrends = (overview: OverviewResponse): ReportSnapshotTrend[] => {
       ...compareRecentWindow(anomalySeries),
       note: "Change in anomaly intensity among the most operationally relevant recent events."
     }
-  ];
+  ].slice(0, SNAPSHOT_BUDGET.trends);
 };
 
 const buildDataQualityCaveats = (analytics: AnalyticsLabResponse): string[] => {
@@ -188,7 +203,157 @@ const buildDataQualityCaveats = (analytics: AnalyticsLabResponse): string[] => {
       caveats.push(`${item.label}: ${item.count}.`);
     });
 
-  return caveats.slice(0, 6);
+  return caveats.slice(0, SNAPSHOT_BUDGET.caveats);
+};
+
+const buildOverviewHighlights = (
+  overview: OverviewResponse,
+  composition: CompositionPoint[],
+  dailyActivity: DailyActivityPoint[],
+  timeOfDay: TimeOfDayCompositionPoint[],
+  subjectByCamera: SubjectCameraHeatmapPoint[]
+): ReportSnapshotItem[] => {
+  const totalComposition = composition.reduce((sum, item) => sum + item.uniqueEventGroups, 0);
+  const topComposition = composition
+    .slice(0, 3)
+    .map((item) => ({
+      name: `${item.category} mix`,
+      value: item.uniqueEventGroups,
+      detail: `${item.uniqueEventGroups} grouped events, ${formatShareNote(item.uniqueEventGroups, totalComposition)} in this slice.`
+    }));
+
+  const dailyTotals = Array.from(
+    dailyActivity.reduce<Map<string, number>>((map, point) => {
+      map.set(point.date, (map.get(point.date) ?? 0) + point.uniqueEventGroups);
+      return map;
+    }, new Map())
+  )
+    .map(([date, count]) => ({ date, count }))
+    .sort((left, right) => right.count - left.count || left.date.localeCompare(right.date));
+
+  const peakDay = dailyTotals[0];
+  const recentDailyAverage = average(dailyTotals.slice(0, Math.min(7, dailyTotals.length)).map((item) => item.count));
+
+  const timeOfDayTotals = timeOfDay
+    .map((bucket) => ({
+      bucket: bucket.bucket,
+      count: bucket.wildlife + bucket.human + bucket.vehicle + bucket.emptyScene
+    }))
+    .sort((left, right) => right.count - left.count || left.bucket.localeCompare(right.bucket));
+  const dominantTimeOfDay = timeOfDayTotals[0];
+
+  const topSubjectByCamera = [...subjectByCamera]
+    .sort((left, right) => right.uniqueEventGroups - left.uniqueEventGroups || left.cameraName.localeCompare(right.cameraName))
+    .slice(0, 2)
+    .map((item) => ({
+      name: `${item.cameraName} • ${item.subjectClass}`,
+      value: item.uniqueEventGroups,
+      detail: `${item.uniqueEventGroups} grouped events for this camera/subject combination.`
+    }));
+
+  const summary: ReportSnapshotItem[] = [
+    {
+      name: "Grouped event volume",
+      value: overview.kpis.totalEvents,
+      detail: `${overview.kpis.totalEvents} grouped events across ${overview.kpis.activeCameras} active cameras in the current filter slice.`
+    },
+    ...topComposition,
+    peakDay
+      ? {
+          name: "Peak activity day",
+          value: peakDay.count,
+          detail: `${peakDay.date} recorded ${peakDay.count} grouped events. Recent average is ${round(recentDailyAverage, 1) ?? 0} per day.`
+        }
+      : null,
+    dominantTimeOfDay
+      ? {
+          name: "Dominant time of day",
+          value: dominantTimeOfDay.count,
+          detail: `${dominantTimeOfDay.bucket} contributed ${dominantTimeOfDay.count} grouped events in the current slice.`
+        }
+      : null,
+    ...topSubjectByCamera
+  ].filter((item): item is ReportSnapshotItem => Boolean(item));
+
+  return summary.slice(0, SNAPSHOT_BUDGET.highlights);
+};
+
+const buildOpsHighlights = (overview: OverviewResponse): ReportSnapshotItem[] => {
+  const staleCamera = [...overview.staleCameras]
+    .sort((left, right) => (right.lastSeenHoursAgo ?? 0) - (left.lastSeenHoursAgo ?? 0))
+    [0];
+  const highestLag = [...overview.cameraHealth]
+    .filter((camera) => camera.avgProcessingLagSeconds !== null)
+    .sort((left, right) => (right.avgProcessingLagSeconds ?? 0) - (left.avgProcessingLagSeconds ?? 0))
+    [0];
+  const lowestVoltage = [...overview.cameraHealth]
+    .filter((camera) => camera.avgVoltage !== null)
+    .sort((left, right) => (left.avgVoltage ?? 99) - (right.avgVoltage ?? 99))
+    [0];
+
+  const items: ReportSnapshotItem[] = [
+    {
+      name: "Cameras with alerts",
+      value: overview.kpis.camerasWithAlerts,
+      detail: `${overview.kpis.camerasWithAlerts} cameras are currently flagged with non-healthy operational status.`
+    },
+    staleCamera
+      ? {
+          name: "Stalest camera",
+          value: round(staleCamera.lastSeenHoursAgo, 1),
+          status: staleCamera.status,
+          detail: `${staleCamera.cameraName} was last seen ${round(staleCamera.lastSeenHoursAgo, 1)} hours ago.`
+        }
+      : null,
+    highestLag
+      ? {
+          name: "Highest lag camera",
+          value: round(highestLag.avgProcessingLagSeconds, 1),
+          status: highestLag.status,
+          detail: `${highestLag.cameraName} is averaging ${Math.round((highestLag.avgProcessingLagSeconds ?? 0) / 60)} minutes of processing lag.`
+        }
+      : null,
+    lowestVoltage
+      ? {
+          name: "Lowest voltage camera",
+          value: round(lowestVoltage.avgVoltage, 2),
+          status: lowestVoltage.status,
+          detail: `${lowestVoltage.cameraName} is averaging ${round(lowestVoltage.avgVoltage, 2)}v.`
+        }
+      : null,
+    {
+      name: "Upload success",
+      value: round(overview.kpis.uploadSuccessPct, 1),
+      detail: `${round(overview.kpis.uploadSuccessPct, 1)}% of grouped events reached upload in the current period.`
+    }
+  ].filter((item): item is ReportSnapshotItem => Boolean(item));
+
+  return items.slice(0, SNAPSHOT_BUDGET.highlights);
+};
+
+const buildAdvancedHighlights = (analytics: AnalyticsLabResponse): ReportSnapshotItem[] => {
+  const forecastLeaders = analytics.cameraForecastLeaders.slice(0, 2).map((item) => ({
+    name: `${item.cameraName} forecast gap`,
+    value: round(item.residualPct, 1),
+    detail: `Actual ${item.actual} vs expected ${round(item.expected, 1)} on ${item.date}.`
+  }));
+
+  const novelLeaders = analytics.novelEvents.slice(0, 2).map((item) => ({
+    name: `${item.cameraName} ${item.category} novelty`,
+    value: round(item.noveltyScore, 1),
+    detail: `${item.currentCount} recent groups vs ${round(item.baselineDailyAvg, 1)}/day baseline around ${String(item.hour).padStart(2, "0")}:00.`
+  }));
+
+  const strongestShift = analytics.categoryShiftMatrix
+    .filter((item) => Math.abs(item.shiftPct) >= 5)
+    .slice(0, 1)
+    .map((item) => ({
+      name: `${item.cameraName} category shift`,
+      value: round(item.shiftPct, 1),
+      detail: `${item.category} moved to ${round(item.recentSharePct, 1)}% share from ${round(item.baselineSharePct, 1)}%.`
+    }));
+
+  return [...forecastLeaders, ...novelLeaders, ...strongestShift].slice(0, SNAPSHOT_BUDGET.highlights);
 };
 
 export const buildReportFilterKey = (filters: DashboardFilters) => stableSerialize(normalizeFilters(filters));
@@ -196,7 +361,13 @@ export const buildReportFilterKey = (filters: DashboardFilters) => stableSeriali
 export const buildReportSnapshot = (
   filters: DashboardFilters,
   overview: OverviewResponse,
-  analytics: AnalyticsLabResponse
+  analytics: AnalyticsLabResponse,
+  dashboard: {
+    dailyActivity: DailyActivityPoint[];
+    timeOfDay: TimeOfDayCompositionPoint[];
+    subjectByCamera: SubjectCameraHeatmapPoint[];
+    composition: CompositionPoint[];
+  }
 ): ReportSnapshotSummary => {
   const normalizedFilters = normalizeFilters(filters);
   const filterKey = buildReportFilterKey(normalizedFilters);
@@ -249,12 +420,12 @@ export const buildReportSnapshot = (
     { label: "Avg processing lag", value: round(overview.kpis.avgProcessingLagSeconds, 1), unit: "sec" },
     { label: "Avg voltage", value: round(overview.kpis.avgVoltage, 2), unit: "v" },
     { label: "Cameras with alerts", value: overview.kpis.camerasWithAlerts }
-  ];
+  ].slice(0, SNAPSHOT_BUDGET.metrics);
 
   const narrativeContext = [
     ...overview.insights.map((item) => `${item.title}: ${item.detail}`),
     ...analytics.advancedInsights.map((item) => `${item.title}: ${item.detail}`)
-  ].slice(0, 6);
+  ].slice(0, SNAPSHOT_BUDGET.narrative);
 
   return {
     filterKey,
@@ -264,9 +435,18 @@ export const buildReportSnapshot = (
       endDate: normalizedFilters.end_date ?? ""
     },
     overviewMetrics,
+    overviewHighlights: buildOverviewHighlights(
+      overview,
+      dashboard.composition,
+      dashboard.dailyActivity,
+      dashboard.timeOfDay,
+      dashboard.subjectByCamera
+    ),
     pipeline: buildPipelineMetrics(overview),
+    opsHighlights: buildOpsHighlights(overview),
     topCameras,
     atRiskCameras,
+    advancedHighlights: buildAdvancedHighlights(analytics),
     notableShifts,
     anomalies,
     trends: buildTrends(overview),
