@@ -589,6 +589,7 @@ export const reportSourceModeSchema = z.enum(["persistent", "ephemeral"]);
 export type ReportSourceMode = z.infer<typeof reportSourceModeSchema>;
 
 export const reportDebugSchema = z.object({
+  requestId: z.string().nullable().optional(),
   lastErrorCode: z.string().nullable().optional(),
   lastErrorMessage: z.string().nullable().optional(),
   timingMs: z.record(z.string(), z.number()).optional()
@@ -691,7 +692,9 @@ export const triggerReportResponseSchema = z.object({
   reportId: z.string(),
   isExactMatch: z.boolean(),
   report: reportRecordSchema.nullable().optional(),
-  reason: z.string().nullable().optional()
+  reason: z.string().nullable().optional(),
+  errorCode: z.string().nullable().optional(),
+  requestId: z.string().nullable().optional()
 });
 export type TriggerReportResponse = z.infer<typeof triggerReportResponseSchema>;
 

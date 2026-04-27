@@ -10,6 +10,7 @@ import type {
 import { buildReportFilterKey, normalizeReportFilters } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { ensureReportsStoreReady, pool, reportsStoreReady } from "../db.js";
+import { toReportServiceError, type ReportErrorCode } from "./errors.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
 import { hashReportSnapshot } from "./snapshot.js";
 import {
@@ -24,6 +25,8 @@ import {
 
 const reportClient = createOpenRouterReportClient();
 const supportsEphemeralGeneration = () => Boolean(appConfig.openRouterApiKey);
+const buildRequestId = () => randomUUID();
+const getSnapshotBytes = (snapshot: ReportSnapshotSummary) => Buffer.byteLength(JSON.stringify(snapshot), "utf8");
 
 const toIdleResponse = (): GetReportResponse => ({
   status: "idle",
@@ -100,12 +103,86 @@ const coerceSnapshot = (filters: DashboardFilters, snapshot: ReportSnapshotSumma
   };
 };
 
-const buildEphemeralResponse = async (filters: DashboardFilters, snapshot: ReportSnapshotSummary): Promise<TriggerReportResponse> => {
+const logGenerateAttempt = (payload: {
+  requestId: string;
+  snapshotHash: string;
+  phase: ReportPhase;
+  elapsedMs?: number;
+  model?: string;
+  cacheKeyAvailable?: boolean;
+  storage?: {
+    databaseStatus: string;
+    readOnly: boolean | null;
+    schemaReady: boolean;
+    connectionSource: string;
+    failureReason: string | null;
+  };
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  timingMs?: Record<string, number>;
+}) => {
+  console.log("reports.generate", payload);
+};
+
+const buildErrorResponse = (input: {
+  requestId: string;
+  snapshotHash: string | null;
+  reason: string;
+  errorCode: ReportErrorCode;
+  phase?: ReportPhase;
+}): TriggerReportResponse => {
+  logGenerateAttempt({
+    requestId: input.requestId,
+    snapshotHash: input.snapshotHash ?? "unavailable",
+    phase: input.phase ?? "error",
+    errorCode: input.errorCode,
+    errorMessage: input.reason
+  });
+
+  return {
+    status: "error",
+    phase: input.phase ?? "error",
+    cacheKey: input.snapshotHash,
+    reportId: "unavailable",
+    isExactMatch: false,
+    report: null,
+    reason: input.reason,
+    errorCode: input.errorCode,
+    requestId: input.requestId
+  };
+};
+
+const buildEphemeralResponse = async (
+  filters: DashboardFilters,
+  snapshot: ReportSnapshotSummary,
+  requestId: string,
+  deadlineAtMs: number,
+  baseTimingMs: Record<string, number>
+): Promise<TriggerReportResponse> => {
   const overallStartedAt = Date.now();
   const filterKey = buildReportFilterKey(filters);
   const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-  const modelResult = await reportClient.generateReport(snapshot);
+  const modelResult = await reportClient.generateReport(snapshot, { requestId, deadlineAtMs });
   const completedAt = new Date().toISOString();
+  const timingMs = {
+    ...baseTimingMs,
+    modelRequest: modelResult.timingMs.modelRequest,
+    validation: modelResult.timingMs.validation,
+    snapshotBytes: modelResult.timingMs.snapshotBytes,
+    promptChars: modelResult.timingMs.promptChars,
+    modelCalls: modelResult.timingMs.modelCalls,
+    total: Date.now() - overallStartedAt
+  };
+
+  logGenerateAttempt({
+    requestId,
+    snapshotHash,
+    phase: "ready",
+    elapsedMs: timingMs.total,
+    model: appConfig.openRouterModel,
+    cacheKeyAvailable: true,
+    timingMs
+  });
 
   return {
     status: "ready",
@@ -113,6 +190,8 @@ const buildEphemeralResponse = async (filters: DashboardFilters, snapshot: Repor
     cacheKey: snapshotHash,
     reportId: `ephemeral:${filterKey}`,
     isExactMatch: false,
+    errorCode: null,
+    requestId,
     report: {
       id: `ephemeral:${filterKey}`,
       normalizedFilterKey: filterKey,
@@ -133,101 +212,79 @@ const buildEphemeralResponse = async (filters: DashboardFilters, snapshot: Repor
       report: modelResult.report,
       snapshot,
       debug: {
+        requestId,
         lastErrorCode: null,
         lastErrorMessage: null,
-        timingMs: {
-          modelRequest: modelResult.timingMs.modelRequest,
-          validation: modelResult.timingMs.validation,
-          total: Date.now() - overallStartedAt
-        }
+        timingMs
       }
     },
     reason: null
   };
 };
 
-const buildStoredResponse = async (
-  filters: DashboardFilters,
-  snapshot: ReportSnapshotSummary,
-  snapshotHash: string
-): Promise<TriggerReportResponse> => {
-  const overallStartedAt = Date.now();
-  const filterKey = buildReportFilterKey(filters);
-  const reportRow = await createQueuedReport({
-    id: randomUUID(),
-    filterKey,
-    promptVersion: appConfig.reportPromptVersion,
-    model: appConfig.openRouterModel,
-    filters
-  });
+const persistReportBestEffort = async (input: {
+  requestId: string;
+  filters: DashboardFilters;
+  snapshot: ReportSnapshotSummary;
+  snapshotHash: string;
+  report: NonNullable<TriggerReportResponse["report"]>["report"];
+  timingMs: Record<string, number>;
+}) => {
+  if (!reportsStoreReady() || !input.report) {
+    return null;
+  }
 
-  await updateReportPhase(reportRow.id, {
-    jobStatus: "generating",
-    phase: "calling_model",
-    snapshotHash,
-    snapshot,
-    started: true,
-    debugPatch: {
-      lastErrorCode: null,
-      lastErrorMessage: null,
-      timingMs: {}
-    }
-  });
-
+  const startedAt = Date.now();
   try {
-    const modelResult = await reportClient.generateReport(snapshot);
+    const filterKey = buildReportFilterKey(input.filters);
+    const reportRow = await createQueuedReport({
+      id: randomUUID(),
+      filterKey,
+      promptVersion: appConfig.reportPromptVersion,
+      model: appConfig.openRouterModel,
+      filters: input.filters
+    });
+
     const readyRow = await updateReportPhase(reportRow.id, {
       jobStatus: "ready",
       phase: "ready",
-      snapshotHash,
-      snapshot,
-      report: modelResult.report,
+      snapshotHash: input.snapshotHash,
+      snapshot: input.snapshot,
+      report: input.report,
+      started: true,
       completed: true,
       debugPatch: {
+        requestId: input.requestId,
         timingMs: {
-          modelRequest: modelResult.timingMs.modelRequest,
-          validation: modelResult.timingMs.validation,
-          total: Date.now() - overallStartedAt
+          ...input.timingMs,
+          persistence: Date.now() - startedAt
         }
       }
     });
 
-    return {
-      status: "ready",
+    logGenerateAttempt({
+      requestId: input.requestId,
+      snapshotHash: input.snapshotHash,
       phase: "ready",
-      cacheKey: snapshotHash,
-      reportId: readyRow?.id ?? reportRow.id,
-      isExactMatch: false,
-      report: readyRow ? toReportRecord(readyRow, "ready") : null,
-      reason: null
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Report generation failed.";
-    const failedRow = await updateReportPhase(reportRow.id, {
-      jobStatus: "error",
-      phase: "error",
-      snapshotHash,
-      snapshot,
-      error: message,
-      completed: true,
-      debugPatch: {
-        lastErrorCode: "GENERATION_FAILED",
-        lastErrorMessage: message,
-        timingMs: {
-          total: Date.now() - overallStartedAt
-        }
+      elapsedMs: Date.now() - startedAt,
+      cacheKeyAvailable: true,
+      timingMs: {
+        persistence: Date.now() - startedAt
       }
     });
 
-    return {
-      status: "error",
+    return readyRow ? toReportRecord(readyRow, "ready") : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown reports storage error.";
+    logGenerateAttempt({
+      requestId: input.requestId,
+      snapshotHash: input.snapshotHash,
       phase: "error",
-      cacheKey: snapshotHash,
-      reportId: failedRow?.id ?? reportRow.id,
-      isExactMatch: false,
-      report: failedRow ? toReportRecord(failedRow, "error") : null,
-      reason: message
-    };
+      errorCode: "REPORT_STORAGE_UNAVAILABLE",
+      errorMessage: message,
+      elapsedMs: Date.now() - startedAt
+    });
+    return null;
   }
 };
 
@@ -317,56 +374,110 @@ export const getLatestReport = async (filters: DashboardFilters): Promise<GetRep
 export const triggerReportGeneration = async (
   filters: DashboardFilters,
   snapshotInput: ReportSnapshotSummary,
-  force = false
+  force = false,
+  requestId: string = buildRequestId()
 ): Promise<TriggerReportResponse> => {
+  const overallStartedAt = Date.now();
+  const deadlineAtMs = overallStartedAt + appConfig.reportGenerationTimeoutMs;
+
   if (!appConfig.openRouterApiKey) {
-    return {
-      status: "error",
-      phase: "error",
-      cacheKey: null,
-      reportId: "unavailable",
-      isExactMatch: false,
-      report: null,
+    return buildErrorResponse({
+      requestId,
+      snapshotHash: null,
+      errorCode: "REPORT_MODEL_UNAVAILABLE",
       reason: "Report generation is unavailable because OPENROUTER_API_KEY is not configured on the server."
-    };
+    });
   }
 
   const snapshot = coerceSnapshot(filters, snapshotInput);
   const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-  const reportsStoreIssue = await getReportsStoreIssue();
+  const snapshotBytes = getSnapshotBytes(snapshot);
+  const storageStartedAt = Date.now();
+  const storageState = await ensureReportsStoreReady();
+  const storageCheckMs = Date.now() - storageStartedAt;
+  const baseTimingMs = {
+    storageCheck: storageCheckMs,
+    snapshotBytes
+  };
 
-  if (!reportsStoreIssue && !force) {
-    const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel);
-    if (exactReady) {
-      return {
-        status: "ready",
-        phase: "ready",
-        cacheKey: snapshotHash,
-        reportId: exactReady.id,
-        isExactMatch: true,
-        report: toReportRecord(exactReady, "ready", { isExactMatch: true }),
-        reason: null
-      };
+  logGenerateAttempt({
+    requestId,
+    snapshotHash,
+    phase: "queued",
+    elapsedMs: Date.now() - overallStartedAt,
+    model: appConfig.openRouterModel,
+    cacheKeyAvailable: Boolean(snapshotHash),
+    storage: {
+      databaseStatus: storageState.databaseStatus,
+      readOnly: storageState.readOnly,
+      schemaReady: storageState.schemaReady,
+      connectionSource: storageState.connectionSource,
+      failureReason: storageState.failureReason
+    },
+    timingMs: baseTimingMs
+  });
+
+  if (reportsStoreReady() && !force) {
+    try {
+      const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel);
+      if (exactReady) {
+        return {
+          status: "ready",
+          phase: "ready",
+          cacheKey: snapshotHash,
+          reportId: exactReady.id,
+          isExactMatch: true,
+          report: toReportRecord(exactReady, "ready", { isExactMatch: true }),
+          reason: null,
+          errorCode: null,
+          requestId
+        };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown reports storage error.";
+      logGenerateAttempt({
+        requestId,
+        snapshotHash,
+        phase: "error",
+        errorCode: "REPORT_STORAGE_UNAVAILABLE",
+        errorMessage: message
+      });
     }
   }
 
   try {
-    if (reportsStoreIssue) {
-      return await buildEphemeralResponse(filters, snapshot);
+    const response = await buildEphemeralResponse(filters, snapshot, requestId, deadlineAtMs, baseTimingMs);
+
+    if (response.report?.report) {
+      const persistenceStartedAt = Date.now();
+      const persistedRecord = await persistReportBestEffort({
+        requestId,
+        filters,
+        snapshot,
+        snapshotHash,
+        report: response.report.report,
+        timingMs: response.report.debug?.timingMs ?? {}
+      });
+      if (persistedRecord) {
+        response.report = persistedRecord;
+        response.reportId = persistedRecord.id;
+      }
+      if (response.report?.debug?.timingMs) {
+        response.report.debug.timingMs.persistence = response.report.debug.timingMs.persistence ?? Date.now() - persistenceStartedAt;
+        response.report.debug.timingMs.total = Date.now() - overallStartedAt;
+      }
     }
 
-    return await buildStoredResponse(filters, snapshot, snapshotHash);
+    return response;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Report generation failed.";
-    return {
-      status: "error",
-      phase: "error",
-      cacheKey: snapshotHash,
-      reportId: "unavailable",
-      isExactMatch: false,
-      report: null,
-      reason: message
-    };
+    const normalized = toReportServiceError(error);
+    return buildErrorResponse({
+      requestId,
+      snapshotHash,
+      errorCode: normalized.code,
+      phase: normalized.phase,
+      reason: normalized.message
+    });
   }
 };
 

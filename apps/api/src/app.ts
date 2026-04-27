@@ -4,7 +4,6 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ZodError } from "zod";
 import { appConfig } from "./config.js";
-import { ensureReportsStoreReady } from "./db.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { queryRouter } from "./routes/query.js";
 import { reportsRouter } from "./routes/reports.js";
@@ -76,6 +75,5 @@ export const createApp = () => {
 };
 
 const app = createApp();
-void ensureReportsStoreReady();
 
 export default app;
