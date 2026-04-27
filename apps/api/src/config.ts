@@ -82,6 +82,7 @@ export const appConfig = {
   openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
   openRouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
   openRouterModel: process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4.6",
+  reportModelTimeoutMs: parseNumber(process.env.REPORT_MODEL_TIMEOUT_MS, 45_000),
   reportPromptVersion: process.env.REPORT_PROMPT_VERSION ?? "v1",
   reportsEnabled: Boolean(reportsPostgres),
   reportsConnectionSource,

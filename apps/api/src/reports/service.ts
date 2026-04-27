@@ -1,76 +1,29 @@
 import { randomUUID } from "node:crypto";
-import type { DashboardFilters, GetReportResponse, ReportPhase, ReportStatusResponse, TriggerReportResponse } from "@grizcam/shared";
+import type {
+  DashboardFilters,
+  GetReportResponse,
+  ReportPhase,
+  ReportSnapshotSummary,
+  ReportStatusResponse,
+  TriggerReportResponse
+} from "@grizcam/shared";
+import { buildReportFilterKey, normalizeReportFilters } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { ensureReportsStoreReady, pool, reportsStoreReady } from "../db.js";
-import { getAnalyticsLab, getComposition, getDailyActivity, getOverview, getSubjectByCamera, getTimeOfDayComposition } from "../queries/dashboard.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
-import { buildReportFilterKey, buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
+import { hashReportSnapshot } from "./snapshot.js";
 import {
   createQueuedReport,
   findExactReadyReport,
   findLatestByFilterKey,
   findLatestReadyByFilterKey,
-  getReportById,
   toReportRecord,
   updateReportPhase,
   type StoredReportRow
 } from "./storage.js";
 
-const inflightReportIds = new Set<string>();
 const reportClient = createOpenRouterReportClient();
 const supportsEphemeralGeneration = () => Boolean(appConfig.openRouterApiKey);
-
-const buildReportSourceSnapshot = async (filters: DashboardFilters) => {
-  const analyticsFetchStartedAt = Date.now();
-  const [overview, analytics, dailyActivity, timeOfDay, subjectByCamera, composition] = await Promise.all([
-    getOverview(filters),
-    getAnalyticsLab(filters),
-    getDailyActivity(filters),
-    getTimeOfDayComposition(filters),
-    getSubjectByCamera(filters),
-    getComposition(filters)
-  ]);
-  const analyticsFetch = Date.now() - analyticsFetchStartedAt;
-
-  const snapshotAssemblyStartedAt = Date.now();
-  const snapshot = buildReportSnapshot(filters, overview, analytics, {
-    dailyActivity,
-    timeOfDay,
-    subjectByCamera,
-    composition
-  });
-
-  return {
-    snapshot,
-    timingMs: {
-      analyticsFetch,
-      snapshotAssembly: Date.now() - snapshotAssemblyStartedAt
-    }
-  };
-};
-
-const generateOperationalBriefing = async (snapshot: Awaited<ReturnType<typeof buildReportSourceSnapshot>>["snapshot"]) =>
-  reportClient.generateReport(snapshot);
-
-const toDisabledResponse = (
-  reason = "Reports are unavailable. Configure REPORTS_DATABASE_URL or use a writable DATABASE_URL for reports."
-): GetReportResponse => ({
-  status: "disabled",
-  cacheKey: null,
-  phase: "disabled",
-  reason,
-  latest: null,
-  stale: null
-});
-
-const toErrorResponse = (reason: string): GetReportResponse => ({
-  status: "error",
-  cacheKey: null,
-  phase: "error",
-  reason,
-  latest: null,
-  stale: null
-});
 
 const toIdleResponse = (): GetReportResponse => ({
   status: "idle",
@@ -134,33 +87,44 @@ const getReportsStoreIssue = async () => {
   return null;
 };
 
-const generateEphemeralReport = async (filters: DashboardFilters) => {
+const coerceSnapshot = (filters: DashboardFilters, snapshot: ReportSnapshotSummary): ReportSnapshotSummary => {
+  const normalizedFilters = normalizeReportFilters(filters);
+  return {
+    ...snapshot,
+    filters: normalizedFilters,
+    filterKey: buildReportFilterKey(normalizedFilters),
+    dateRange: {
+      startDate: normalizedFilters.start_date ?? "",
+      endDate: normalizedFilters.end_date ?? ""
+    }
+  };
+};
+
+const buildEphemeralResponse = async (filters: DashboardFilters, snapshot: ReportSnapshotSummary): Promise<TriggerReportResponse> => {
   const overallStartedAt = Date.now();
-  const sourceSnapshot = await buildReportSourceSnapshot(filters);
-  const snapshot = sourceSnapshot.snapshot;
   const filterKey = buildReportFilterKey(filters);
   const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-  const modelResult = await generateOperationalBriefing(snapshot);
+  const modelResult = await reportClient.generateReport(snapshot);
   const completedAt = new Date().toISOString();
 
   return {
-    status: "ready" as const,
-    phase: "ready" as const,
+    status: "ready",
+    phase: "ready",
     cacheKey: snapshotHash,
     reportId: `ephemeral:${filterKey}`,
     isExactMatch: false,
     report: {
       id: `ephemeral:${filterKey}`,
       normalizedFilterKey: filterKey,
+      sourceMode: "ephemeral",
       snapshotHash,
       promptVersion: appConfig.reportPromptVersion,
       model: appConfig.openRouterModel,
-      sourceMode: "ephemeral" as const,
-      jobStatus: "ready" as const,
-      viewStatus: "ready" as const,
+      jobStatus: "ready",
+      viewStatus: "ready",
       isRefreshing: false,
       isExactMatch: false,
-      phase: "ready" as const,
+      phase: "ready",
       generatedAt: completedAt,
       updatedAt: completedAt,
       startedAt: new Date(overallStartedAt).toISOString(),
@@ -172,8 +136,6 @@ const generateEphemeralReport = async (filters: DashboardFilters) => {
         lastErrorCode: null,
         lastErrorMessage: null,
         timingMs: {
-          analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
-          snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
           modelRequest: modelResult.timingMs.modelRequest,
           validation: modelResult.timingMs.validation,
           total: Date.now() - overallStartedAt
@@ -182,6 +144,91 @@ const generateEphemeralReport = async (filters: DashboardFilters) => {
     },
     reason: null
   };
+};
+
+const buildStoredResponse = async (
+  filters: DashboardFilters,
+  snapshot: ReportSnapshotSummary,
+  snapshotHash: string
+): Promise<TriggerReportResponse> => {
+  const overallStartedAt = Date.now();
+  const filterKey = buildReportFilterKey(filters);
+  const reportRow = await createQueuedReport({
+    id: randomUUID(),
+    filterKey,
+    promptVersion: appConfig.reportPromptVersion,
+    model: appConfig.openRouterModel,
+    filters
+  });
+
+  await updateReportPhase(reportRow.id, {
+    jobStatus: "generating",
+    phase: "calling_model",
+    snapshotHash,
+    snapshot,
+    started: true,
+    debugPatch: {
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      timingMs: {}
+    }
+  });
+
+  try {
+    const modelResult = await reportClient.generateReport(snapshot);
+    const readyRow = await updateReportPhase(reportRow.id, {
+      jobStatus: "ready",
+      phase: "ready",
+      snapshotHash,
+      snapshot,
+      report: modelResult.report,
+      completed: true,
+      debugPatch: {
+        timingMs: {
+          modelRequest: modelResult.timingMs.modelRequest,
+          validation: modelResult.timingMs.validation,
+          total: Date.now() - overallStartedAt
+        }
+      }
+    });
+
+    return {
+      status: "ready",
+      phase: "ready",
+      cacheKey: snapshotHash,
+      reportId: readyRow?.id ?? reportRow.id,
+      isExactMatch: false,
+      report: readyRow ? toReportRecord(readyRow, "ready") : null,
+      reason: null
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Report generation failed.";
+    const failedRow = await updateReportPhase(reportRow.id, {
+      jobStatus: "error",
+      phase: "error",
+      snapshotHash,
+      snapshot,
+      error: message,
+      completed: true,
+      debugPatch: {
+        lastErrorCode: "GENERATION_FAILED",
+        lastErrorMessage: message,
+        timingMs: {
+          total: Date.now() - overallStartedAt
+        }
+      }
+    });
+
+    return {
+      status: "error",
+      phase: "error",
+      cacheKey: snapshotHash,
+      reportId: failedRow?.id ?? reportRow.id,
+      isExactMatch: false,
+      report: failedRow ? toReportRecord(failedRow, "error") : null,
+      reason: message
+    };
+  }
 };
 
 export const selectLatestReportView = (input: {
@@ -233,133 +280,13 @@ export const selectLatestReportView = (input: {
   };
 };
 
-const scheduleReportGeneration = (reportId: string) => {
-  if (inflightReportIds.has(reportId)) {
-    return;
-  }
-
-  inflightReportIds.add(reportId);
-
-  setTimeout(async () => {
-    const overallStartedAt = Date.now();
-    try {
-      const row = await getReportById(reportId);
-      if (!row) {
-        return;
-      }
-
-      await updateReportPhase(reportId, {
-        jobStatus: "generating",
-        phase: "building_snapshot",
-        started: true,
-        debugPatch: {
-          lastErrorCode: null,
-          lastErrorMessage: null,
-          timingMs: {}
-        }
-      });
-
-      const sourceSnapshot = await buildReportSourceSnapshot(row.filters);
-      const snapshot = sourceSnapshot.snapshot;
-      const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
-
-      const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel, reportId);
-      if (exactReady?.report) {
-        await updateReportPhase(reportId, {
-          jobStatus: "ready",
-          phase: "ready",
-          snapshotHash,
-          snapshot,
-          report: exactReady.report,
-          completed: true,
-          debugPatch: {
-            timingMs: {
-              analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
-              snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
-              total: Date.now() - overallStartedAt
-            }
-          }
-        });
-        return;
-      }
-
-      await updateReportPhase(reportId, {
-        jobStatus: "generating",
-        phase: "calling_model",
-        snapshotHash,
-        snapshot,
-        debugPatch: {
-          timingMs: {
-            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
-            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly
-          }
-        }
-      });
-
-      const modelResult = await generateOperationalBriefing(snapshot);
-
-      await updateReportPhase(reportId, {
-        jobStatus: "generating",
-        phase: "validating_response",
-        snapshotHash,
-        snapshot,
-        debugPatch: {
-          timingMs: {
-            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
-            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
-            modelRequest: modelResult.timingMs.modelRequest,
-            validation: modelResult.timingMs.validation
-          }
-        }
-      });
-
-      await updateReportPhase(reportId, {
-        jobStatus: "ready",
-        phase: "ready",
-        snapshotHash,
-        snapshot,
-        report: modelResult.report,
-        completed: true,
-        debugPatch: {
-          timingMs: {
-            analyticsFetch: sourceSnapshot.timingMs.analyticsFetch,
-            snapshotAssembly: sourceSnapshot.timingMs.snapshotAssembly,
-            modelRequest: modelResult.timingMs.modelRequest,
-            validation: modelResult.timingMs.validation,
-            total: Date.now() - overallStartedAt
-          }
-        }
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Report generation failed.";
-      await updateReportPhase(reportId, {
-        jobStatus: "error",
-        phase: "error",
-        error: message,
-        completed: true,
-        debugPatch: {
-          lastErrorCode: "GENERATION_FAILED",
-          lastErrorMessage: message,
-          timingMs: {
-            total: Date.now() - overallStartedAt
-          }
-        }
-      }).catch(() => {
-        console.error("Failed to persist report error state", { reportId, message });
-      });
-    } finally {
-      inflightReportIds.delete(reportId);
-    }
-  }, 0);
-};
-
 export const getLatestReport = async (filters: DashboardFilters): Promise<GetReportResponse> => {
   const reportsStoreIssue = await getReportsStoreIssue();
   if (reportsStoreIssue) {
     return {
       ...toIdleResponse(),
       reason: supportsEphemeralGeneration()
-        ? "Persistent report storage is unavailable; report generation will run on demand when you open Reports."
+        ? "Manual on-demand generation is available from the Reports page once analytics inputs are loaded."
         : reportsStoreIssue.reason
     };
   }
@@ -376,41 +303,22 @@ export const getLatestReport = async (filters: DashboardFilters): Promise<GetRep
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Reports storage is unavailable.";
-    return toErrorResponse(message);
+    return {
+      status: "error",
+      cacheKey: null,
+      phase: "error",
+      reason: message,
+      latest: null,
+      stale: null
+    };
   }
 };
 
-export const triggerReportGeneration = async (filters: DashboardFilters, force = false): Promise<TriggerReportResponse> => {
-  const reportsStoreIssue = await getReportsStoreIssue();
-  if (reportsStoreIssue) {
-    if (supportsEphemeralGeneration()) {
-      try {
-        return await generateEphemeralReport(filters);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Report generation failed.";
-        return {
-          status: "error",
-          phase: "error",
-          cacheKey: null,
-          reportId: "ephemeral:error",
-          isExactMatch: false,
-          report: null,
-          reason: message
-        };
-      }
-    }
-
-    return {
-      status: reportsStoreIssue.status,
-      phase: reportsStoreIssue.phase,
-      cacheKey: null,
-      reportId: "disabled",
-      isExactMatch: false,
-      report: null,
-      reason: reportsStoreIssue.reason
-    };
-  }
-
+export const triggerReportGeneration = async (
+  filters: DashboardFilters,
+  snapshotInput: ReportSnapshotSummary,
+  force = false
+): Promise<TriggerReportResponse> => {
   if (!appConfig.openRouterApiKey) {
     return {
       status: "error",
@@ -423,74 +331,37 @@ export const triggerReportGeneration = async (filters: DashboardFilters, force =
     };
   }
 
-  try {
-    const filterKey = buildReportFilterKey(filters);
-    const latestByFilter = await findLatestByFilterKey(filterKey);
+  const snapshot = coerceSnapshot(filters, snapshotInput);
+  const snapshotHash = hashReportSnapshot(snapshot, appConfig.reportPromptVersion, appConfig.openRouterModel);
+  const reportsStoreIssue = await getReportsStoreIssue();
 
-    if (latestByFilter && !force) {
-      if (latestByFilter.jobStatus === "queued" || latestByFilter.jobStatus === "generating") {
-        scheduleReportGeneration(latestByFilter.id);
-      }
-
+  if (!reportsStoreIssue && !force) {
+    const exactReady = await findExactReadyReport(snapshotHash, appConfig.reportPromptVersion, appConfig.openRouterModel);
+    if (exactReady) {
       return {
-        status:
-          latestByFilter.jobStatus === "ready"
-            ? "ready"
-            : latestByFilter.jobStatus === "error"
-              ? "error"
-              : "generating",
-        phase: latestByFilter.phase,
-        cacheKey: latestByFilter.snapshotHash,
-        reportId: latestByFilter.id,
-        isExactMatch: latestByFilter.jobStatus === "ready",
-        report:
-          latestByFilter.jobStatus === "ready" || latestByFilter.jobStatus === "error"
-            ? toReportRecord(latestByFilter, phaseToViewStatus(latestByFilter.phase), {
-                isExactMatch: latestByFilter.jobStatus === "ready"
-              })
-            : toReportRecord(latestByFilter, "generating"),
-        reason: latestByFilter.error
-      };
-    }
-
-    if (latestByFilter && (latestByFilter.jobStatus === "queued" || latestByFilter.jobStatus === "generating")) {
-      scheduleReportGeneration(latestByFilter.id);
-      return {
-        status: "generating",
-        phase: latestByFilter.phase,
-        cacheKey: latestByFilter.snapshotHash,
-        reportId: latestByFilter.id,
-        isExactMatch: false,
-        report: toReportRecord(latestByFilter, "generating"),
+        status: "ready",
+        phase: "ready",
+        cacheKey: snapshotHash,
+        reportId: exactReady.id,
+        isExactMatch: true,
+        report: toReportRecord(exactReady, "ready", { isExactMatch: true }),
         reason: null
       };
     }
+  }
 
-    const reportRow = await createQueuedReport({
-      id: randomUUID(),
-      filterKey,
-      promptVersion: appConfig.reportPromptVersion,
-      model: appConfig.openRouterModel,
-      filters
-    });
+  try {
+    if (reportsStoreIssue) {
+      return await buildEphemeralResponse(filters, snapshot);
+    }
 
-    scheduleReportGeneration(reportRow.id);
-
-    return {
-      status: "generating",
-      phase: "queued",
-      cacheKey: null,
-      reportId: reportRow.id,
-      isExactMatch: false,
-      report: toReportRecord(reportRow, "generating"),
-      reason: null
-    };
+    return await buildStoredResponse(filters, snapshot, snapshotHash);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to queue report generation.";
+    const message = error instanceof Error ? error.message : "Report generation failed.";
     return {
       status: "error",
       phase: "error",
-      cacheKey: null,
+      cacheKey: snapshotHash,
       reportId: "unavailable",
       isExactMatch: false,
       report: null,
@@ -507,7 +378,7 @@ export const getReportStatus = async (filters: DashboardFilters): Promise<Report
       cacheKey: null,
       phase: "idle",
       reason: supportsEphemeralGeneration()
-        ? "Persistent report storage is unavailable; generate a report on demand from the Reports page."
+        ? "Manual on-demand generation is available from the Reports page once analytics inputs are loaded."
         : reportsStoreIssue.reason,
       current: null,
       stale: null

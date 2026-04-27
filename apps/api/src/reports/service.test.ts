@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { DashboardFilters, OperationalReport, ReportSnapshotSummary } from "@grizcam/shared";
+import { buildReportSnapshot, type DashboardFilters, type OperationalReport, type ReportSnapshotSummary } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
-import { buildReportSnapshot, hashReportSnapshot } from "./snapshot.js";
+import { hashReportSnapshot } from "./snapshot.js";
 import { selectLatestReportView } from "./service.js";
 import type { StoredReportRow } from "./storage.js";
 
@@ -165,7 +165,10 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
         { date: "2025-01-02", avgUploadLagSeconds: 420, avgAiLagSeconds: 260, avgProcessingLagSeconds: 880 }
       ],
       staleCameras: [{ cameraName: "South Ridge", lastSeen: "2025-01-28T06:00:00", lastSeenHoursAgo: 76, status: "warning", anomalyScore: 71.2 }],
-      categoryDistribution: [],
+      categoryDistribution: [
+        { category: "wildlife", count: 90 },
+        { category: "human", count: 30 }
+      ],
       categoryTrend: [
         { date: "2025-01-01", wildlife: 20, human: 5, vehicle: 1, emptyScene: 2, unknown: 0 },
         { date: "2025-01-02", wildlife: 25, human: 3, vehicle: 0, emptyScene: 1, unknown: 0 }
@@ -217,32 +220,16 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
         suspiciousValueCounts: [{ label: "Suspicious numeric values", count: 3 }],
         pipelineConsistency: [{ label: "AI processed without summary", count: 1 }]
       }
-    },
-    {
-      dailyActivity: [
-        { date: "2025-01-01", cameraName: "North Ridge", uniqueEventGroups: 16, rawRows: 20 },
-        { date: "2025-01-01", cameraName: "South Ridge", uniqueEventGroups: 10, rawRows: 12 },
-        { date: "2025-01-02", cameraName: "North Ridge", uniqueEventGroups: 22, rawRows: 28 }
-      ],
-      timeOfDay: [
-        { bucket: "morning", wildlife: 18, human: 2, vehicle: 0, emptyScene: 1 },
-        { bucket: "evening", wildlife: 26, human: 3, vehicle: 1, emptyScene: 0 }
-      ],
-      subjectByCamera: [
-        { cameraName: "North Ridge", subjectClass: "deer", uniqueEventGroups: 20 },
-        { cameraName: "South Ridge", subjectClass: "human", uniqueEventGroups: 6 }
-      ],
-      composition: [
-        { category: "wildlife", uniqueEventGroups: 85 },
-        { category: "human", uniqueEventGroups: 20 },
-        { category: "vehicle", uniqueEventGroups: 15 }
-      ]
     }
   );
 
   assert.equal(assembled.topCameras.length, 2);
   assert.equal(assembled.atRiskCameras[0]?.name, "South Ridge");
   assert.ok(assembled.overviewHighlights.length > 0);
+  assert.deepEqual(assembled.overviewHighlights.slice(1, 3), [
+    { name: "wildlife mix", value: 90, detail: "90 grouped events, 75% share in this slice." },
+    { name: "human mix", value: 30, detail: "30 grouped events, 25% share in this slice." }
+  ]);
   assert.ok(assembled.opsHighlights.length > 0);
   assert.ok(assembled.advancedHighlights.length > 0);
   assert.ok(assembled.dataQualityCaveats.some((item) => item.includes("Voltage coverage")));

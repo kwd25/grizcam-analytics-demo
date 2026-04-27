@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import type { ReportRecord, ReportStatusResponse } from "@grizcam/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { buildReportSnapshot, type ReportRecord, type ReportSourceBundle } from "@grizcam/shared";
 import type { ReportPhase, ReportViewStatus } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { FilterBar } from "../components/FilterBar";
@@ -10,7 +10,6 @@ import { api } from "../lib/api";
 import { appEnv } from "../lib/env";
 import { classNames, formatDurationShort, formatNullableNumber, formatNumber, titleCase } from "../lib/utils";
 import { useDashboardFilters } from "../hooks/useDashboardFilters";
-import { useReportPrefetch } from "../hooks/useReportPrefetch";
 
 const statusPillClass: Record<ReportViewStatus, string> = {
   idle: "border-white/10 bg-white/5 text-slate-200",
@@ -25,7 +24,7 @@ const phaseLabel: Record<ReportPhase, string> = {
   idle: "Idle",
   disabled: "Disabled",
   queued: "Queued",
-  building_snapshot: "Building snapshot",
+  building_snapshot: "Loading inputs",
   calling_model: "Generating briefing",
   validating_response: "Validating response",
   ready: "Ready",
@@ -33,13 +32,13 @@ const phaseLabel: Record<ReportPhase, string> = {
 };
 
 const phaseDescription: Record<ReportPhase, string> = {
-  idle: "No report job has been created for this filter state yet.",
-  disabled: "Persistent report storage is unavailable. The Reports page can still generate an on-demand briefing when model access is configured.",
-  queued: "The report job has been accepted and is waiting to start.",
-  building_snapshot: "Preparing a compact analytics snapshot from the existing Overview, Ops, and Advanced data sources.",
-  calling_model: "Sending the compact analytics snapshot to OpenRouter to generate the briefing.",
+  idle: "The Overview and Advanced analytics inputs are loaded and ready to generate a report.",
+  disabled: "Report generation is unavailable until OpenRouter is configured on the server.",
+  queued: "The report request has been accepted and is waiting to start.",
+  building_snapshot: "Loading the required analytics inputs for the current filter state.",
+  calling_model: "Sending the compact analytics bundle to OpenRouter to generate the briefing.",
   validating_response: "The model response is being validated and repaired into the required JSON shape if needed.",
-  ready: "The latest report for this filter state is ready.",
+  ready: "The latest generated report is ready.",
   error: "The latest report attempt failed."
 };
 
@@ -56,12 +55,13 @@ const actionButtonClass =
 
 export const ReportsPage = () => {
   const { filters, patchFilters, resetFilters } = useDashboardFilters();
-  const prefetchState = useReportPrefetch(filters);
   const stableFilters = useMemo(() => filters, [filters]);
-  const [ephemeralReport, setEphemeralReport] = useState<ReportRecord | null>(null);
-  const [ephemeralStatus, setEphemeralStatus] = useState<ReportViewStatus>("idle");
-  const [ephemeralPhase, setEphemeralPhase] = useState<ReportPhase>("idle");
-  const [ephemeralReason, setEphemeralReason] = useState<string | null>(null);
+  const inputLoadStartedAt = useRef(Date.now());
+  const [inputLoadMs, setInputLoadMs] = useState<number | null>(null);
+  const [generatedReport, setGeneratedReport] = useState<ReportRecord | null>(null);
+  const [reportStatus, setReportStatus] = useState<ReportViewStatus>("idle");
+  const [reportPhase, setReportPhase] = useState<ReportPhase>("building_snapshot");
+  const [reportReason, setReportReason] = useState<string | null>(null);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
   const healthQuery = useQuery({
@@ -69,190 +69,140 @@ export const ReportsPage = () => {
     queryFn: api.reportHealth,
     staleTime: 30_000
   });
-  const statusQuery = useQuery({
-    queryKey: ["report-status", stableFilters],
-    queryFn: () => api.reportStatus(stableFilters),
-    enabled: healthQuery.data?.reportsEnabled !== false,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "generating" || status === "stale" ? 2000 : false;
-    }
+  const overviewQuery = useQuery({
+    queryKey: ["reports-overview", stableFilters],
+    queryFn: () => api.overview(stableFilters)
   });
-
-  const regenerateMutation = useMutation({
-    mutationFn: () => api.triggerReportGeneration(stableFilters, true),
-    onSuccess: async (result) => {
-      if (healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration) {
-        setEphemeralReport(result.report ?? null);
-        setEphemeralStatus(result.status);
-        setEphemeralPhase(result.phase);
-        setEphemeralReason(result.reason ?? null);
-        return;
-      }
-      await statusQuery.refetch();
-    },
-    onError: (error) => {
-      if (healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration) {
-        setEphemeralReport(null);
-        setEphemeralStatus("error");
-        setEphemeralPhase("error");
-        setEphemeralReason(error instanceof Error ? error.message : "Report generation failed.");
-      }
-    }
+  const analyticsQuery = useQuery({
+    queryKey: ["reports-analytics-lab", stableFilters],
+    queryFn: () => api.analyticsLab(stableFilters)
   });
-  const triggerRegenerate = regenerateMutation.mutate;
-
-  const isEphemeralMode = healthQuery.data?.reportsEnabled === false && healthQuery.data?.supportsEphemeralGeneration;
 
   useEffect(() => {
-    setEphemeralReport(null);
-    setEphemeralStatus("idle");
-    setEphemeralPhase("idle");
-    setEphemeralReason(null);
+    inputLoadStartedAt.current = Date.now();
+    setInputLoadMs(null);
+    setGeneratedReport(null);
+    setReportStatus("idle");
+    setReportPhase("building_snapshot");
+    setReportReason(null);
   }, [stableFilters]);
 
-  useEffect(() => {
-    if (!isEphemeralMode || regenerateMutation.isPending || ephemeralReport || ephemeralStatus !== "idle") {
-      return;
-    }
-
-    setEphemeralStatus("generating");
-    setEphemeralPhase("building_snapshot");
-    setEphemeralReason(null);
-    triggerRegenerate();
-  }, [ephemeralReport, ephemeralStatus, isEphemeralMode, regenerateMutation.isPending, triggerRegenerate]);
+  const inputError = (overviewQuery.error as Error | null) ?? (analyticsQuery.error as Error | null);
+  const inputErrorLabel = overviewQuery.error ? "Overview analytics failed to load." : analyticsQuery.error ? "Advanced analytics failed to load." : null;
+  const inputsLoading = overviewQuery.isLoading || analyticsQuery.isLoading;
+  const inputsReady = Boolean(overviewQuery.data && analyticsQuery.data && !inputError);
 
   useEffect(() => {
-    if (!isEphemeralMode || !regenerateMutation.isPending) {
-      return;
+    if (inputsReady && inputLoadMs === null) {
+      setInputLoadMs(Date.now() - inputLoadStartedAt.current);
+      setReportPhase("idle");
+    }
+  }, [inputLoadMs, inputsReady]);
+
+  const snapshot: ReportSourceBundle | null = useMemo(() => {
+    if (!overviewQuery.data || !analyticsQuery.data) {
+      return null;
     }
 
-    const modelTimer = window.setTimeout(() => {
-      setEphemeralPhase((current) => (current === "building_snapshot" ? "calling_model" : current));
-    }, 1200);
+    return buildReportSnapshot(stableFilters, overviewQuery.data, analyticsQuery.data);
+  }, [analyticsQuery.data, overviewQuery.data, stableFilters]);
 
-    const validationTimer = window.setTimeout(() => {
-      setEphemeralPhase((current) => (current === "calling_model" ? "validating_response" : current));
-    }, 6500);
-
-    return () => {
-      window.clearTimeout(modelTimer);
-      window.clearTimeout(validationTimer);
-    };
-  }, [isEphemeralMode, regenerateMutation.isPending]);
-
-  const reportState: ReportStatusResponse | undefined = isEphemeralMode
-    ? {
-        status: regenerateMutation.isPending ? "generating" : ephemeralStatus,
-        cacheKey: ephemeralReport?.snapshotHash ?? null,
-        phase: regenerateMutation.isPending ? "calling_model" : ephemeralPhase,
-        reason: ephemeralReason ?? (ephemeralStatus === "idle" ? healthQuery.data?.reportsFailureReason ?? null : null),
-        current: ephemeralReport,
-        stale: null
+  const generateMutation = useMutation({
+    mutationFn: () => {
+      if (!snapshot) {
+        throw new Error("Analytics inputs are not ready yet.");
       }
-    : statusQuery.data;
-  const displayRecord = reportState?.status === "stale" ? reportState.stale ?? reportState.current : reportState?.current;
-  const statusRecord = reportState?.current ?? displayRecord;
-  const snapshot = displayRecord?.snapshot;
-  const report = displayRecord?.report;
-  const visibleStatus =
-    reportState && reportState.status !== "idle"
-      ? reportState.status
-      : prefetchState.status !== "idle"
-        ? prefetchState.status
-        : reportState?.status ?? "idle";
-  const visiblePhase =
-    reportState && reportState.phase !== "idle"
-      ? reportState.phase
-      : prefetchState.phase !== "idle"
-        ? prefetchState.phase
-        : reportState?.phase ?? "idle";
-  const visibleReason = reportState?.reason ?? healthQuery.data?.reportsFailureReason ?? null;
-  const isReportsDisabled = visibleStatus === "disabled" || visiblePhase === "disabled";
-  const isRefreshing = reportState?.status === "stale" || regenerateMutation.isPending;
-  const isUsingDatabaseUrlFallback =
-    healthQuery.data?.reportsConnectionSource === "database_url" && !healthQuery.data?.reportsFailureReason;
-  const timingMs = statusRecord?.debug?.timingMs ?? {};
+      return api.triggerReportGeneration(stableFilters, snapshot, true);
+    },
+    onMutate: () => {
+      setReportStatus("generating");
+      setReportPhase("calling_model");
+      setReportReason(null);
+    },
+    onSuccess: (result) => {
+      setGeneratedReport(result.report ?? null);
+      setReportStatus(result.status);
+      setReportPhase(result.phase);
+      setReportReason(result.reason ?? null);
+    },
+    onError: (error) => {
+      setGeneratedReport(null);
+      setReportStatus("error");
+      setReportPhase("error");
+      setReportReason(error instanceof Error ? error.message : "Report generation failed.");
+    }
+  });
+
+  const visibleStatus = generateMutation.isPending ? "generating" : reportStatus;
+  const visiblePhase = generateMutation.isPending ? "calling_model" : reportPhase;
+  const visibleReason = reportReason ?? (!healthQuery.data?.openRouterConfigured ? "OPENROUTER_API_KEY is not configured on the server." : null);
+  const timingMs = generatedReport?.debug?.timingMs ?? {};
+  const generatedBriefing = generatedReport?.report ?? null;
   const timingEntries = [
-    ["Analytics fetch", timingMs.analyticsFetch],
-    ["Snapshot assembly", timingMs.snapshotAssembly],
+    ["Input load", inputLoadMs],
     ["Model request", timingMs.modelRequest],
     ["Validation", timingMs.validation],
     ["Total", timingMs.total]
   ].filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  const canGenerate = Boolean(snapshot) && !inputsLoading && !generateMutation.isPending && healthQuery.data?.openRouterConfigured !== false;
+  const hasStorageWarning = healthQuery.data && !healthQuery.data.reportsEnabled && healthQuery.data.supportsEphemeralGeneration;
 
   return (
     <AppShell
       title="Reports"
-      subtitle="Operational briefings synthesized from the existing analytics stack, generated in the background for the current filter state."
+      subtitle="Operational briefings synthesized from the existing analytics stack, generated after the current analytics inputs are loaded."
       badge={`${appEnv.demoLabel} • Briefings`}
       aside={<FilterBar filters={filters} options={optionsQuery.data} onChange={patchFilters} onReset={resetFilters} />}
     >
-      {isUsingDatabaseUrlFallback ? (
+      {hasStorageWarning ? (
         <div className="rounded-3xl border border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100">
-          Reports are using `DATABASE_URL` because `REPORTS_DATABASE_URL` is unset.
+          Persistent report storage is unavailable. You can still generate a report manually from the loaded analytics inputs.
         </div>
       ) : null}
 
-      {prefetchState.status === "error" || prefetchState.status === "disabled" ? (
+      {healthQuery.data && !healthQuery.data.openRouterConfigured ? (
         <div className="rounded-3xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-          Background prefetch status: {prefetchState.message ?? phaseDescription[prefetchState.phase]}
+          Report generation is disabled because `OPENROUTER_API_KEY` is not configured on the server.
         </div>
       ) : null}
 
-      {!reportState && (statusQuery.isLoading || healthQuery.isLoading) ? (
-        <QueryState title="Preparing operational briefing" detail="Checking storage mode and deciding whether to use cached or on-demand report generation." />
-      ) : statusQuery.error && !isEphemeralMode ? (
+      {inputsLoading || healthQuery.isLoading ? (
+        <QueryState title="Loading report inputs" detail="Fetching Overview and Advanced analytics for the current filter state before report generation is enabled." />
+      ) : inputError ? (
         <QueryState
-          title="Report service unavailable"
-          detail={(statusQuery.error as Error).message || "The reports endpoint returned an unexpected response."}
+          title="Report inputs failed to load"
+          detail={`${inputErrorLabel ?? "Analytics inputs failed to load."} ${inputError.message}`}
           action={
-            <button type="button" className={actionButtonClass} onClick={() => void statusQuery.refetch()}>
-              Retry
+            <button type="button" className={actionButtonClass} onClick={() => {
+              void overviewQuery.refetch();
+              void analyticsQuery.refetch();
+            }}>
+              Retry loading inputs
             </button>
           }
         />
-      ) : visibleStatus === "disabled" ? (
-        <QueryState
-          title="Reports are disabled"
-          detail={visibleReason ?? phaseDescription.disabled}
-          action={
-            <button type="button" className={actionButtonClass} onClick={() => void statusQuery.refetch()}>
-              Recheck configuration
-            </button>
-          }
-        />
-      ) : report ? (
+      ) : generatedBriefing ? (
         <>
           <SectionCard
-            title={report.headline}
-            subtitle={
-              snapshot
-                ? `${snapshot.dateRange.startDate} to ${snapshot.dateRange.endDate} • ${snapshot.filters.camera_name.length || "All"} camera scope`
-                : "Generated from the current analytics slice."
-            }
+            title={generatedBriefing.headline}
+            subtitle={`${snapshot?.dateRange.startDate ?? ""} to ${snapshot?.dateRange.endDate ?? ""} • ${snapshot?.filters.camera_name.length || "All"} camera scope`}
             actions={
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <div className={classNames("rounded-2xl border px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em]", statusPillClass[visibleStatus])}>
-                  {visibleStatus === "stale" ? "Refreshing" : visibleStatus}
+                  {visibleStatus}
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.14em] text-slate-200">
                   {phaseLabel[visiblePhase]}
                 </div>
-                <button
-                  type="button"
-                  className={actionButtonClass}
-                  onClick={() => regenerateMutation.mutate()}
-                  disabled={regenerateMutation.isPending || isReportsDisabled}
-                >
-                  {regenerateMutation.isPending ? "Regenerating…" : "Regenerate report"}
+                <button type="button" className={actionButtonClass} onClick={() => generateMutation.mutate()} disabled={!canGenerate}>
+                  {generateMutation.isPending ? "Generating…" : "Regenerate report"}
                 </button>
               </div>
             }
           >
             <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
               <div className="space-y-3">
-                {report.executive_summary.map((item) => (
+                {generatedBriefing.executive_summary.map((item) => (
                   <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-200">
                     {item}
                   </div>
@@ -272,12 +222,6 @@ export const ReportsPage = () => {
               </div>
             </div>
 
-            {isRefreshing ? (
-              <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Showing the last ready report while a fresh report moves through: {phaseLabel[visiblePhase].toLowerCase()}.
-              </div>
-            ) : null}
-
             {visibleReason && visibleStatus === "error" ? (
               <div className="mt-4 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
                 {visibleReason}
@@ -288,7 +232,7 @@ export const ReportsPage = () => {
           <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
             <SectionCard title="Key Findings" subtitle="Grounded observations with evidence and explicit actionability.">
               <div className="space-y-3">
-                {report.key_findings.map((finding) => (
+                {generatedBriefing.key_findings.map((finding) => (
                   <div key={finding.title} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-semibold text-white">{finding.title}</div>
@@ -309,7 +253,7 @@ export const ReportsPage = () => {
 
             <SectionCard title="Recommended Actions" subtitle="Prioritized next steps for an operator or manager.">
               <div className="space-y-3">
-                {report.recommended_actions.map((item) => (
+                {generatedBriefing.recommended_actions.map((item) => (
                   <div key={`${item.priority}-${item.action}`} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-400/15 text-sm font-semibold text-emerald-100">
@@ -327,8 +271,8 @@ export const ReportsPage = () => {
           <div className="grid gap-4 xl:grid-cols-2">
             <SectionCard title="Risks And Watchouts" subtitle="Operational concerns to keep on the radar.">
               <div className="space-y-3">
-                {report.risks_or_watchouts.length > 0 ? (
-                  report.risks_or_watchouts.map((item) => (
+                {generatedBriefing.risks_or_watchouts.length > 0 ? (
+                  generatedBriefing.risks_or_watchouts.map((item) => (
                     <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4">
                       <div className="text-sm font-semibold text-white">{item.title}</div>
                       <div className="mt-2 text-sm leading-6 text-slate-300">{item.impact}</div>
@@ -343,8 +287,8 @@ export const ReportsPage = () => {
 
             <SectionCard title="Open Questions" subtitle="Unknowns worth resolving before stronger action is taken.">
               <div className="space-y-3">
-                {report.open_questions.length > 0 ? (
-                  report.open_questions.map((item) => (
+                {generatedBriefing.open_questions.length > 0 ? (
+                  generatedBriefing.open_questions.map((item) => (
                     <div key={item} className="rounded-2xl bg-white/5 px-4 py-3 text-sm leading-6 text-slate-300">
                       {item}
                     </div>
@@ -355,141 +299,24 @@ export const ReportsPage = () => {
               </div>
             </SectionCard>
           </div>
-
-          {snapshot ? (
-            <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-              <SectionCard title="Why The Model Said This" subtitle="Compact evidence bundle selected from existing analytics, not raw event dumps.">
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Overview Highlights</div>
-                    <div className="mt-2 space-y-2">
-                      {snapshot.overviewHighlights.map((item) => (
-                        <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
-                          <div className="text-sm font-medium text-white">{item.name}</div>
-                          <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Pipeline</div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {snapshot.pipeline.map((item) => (
-                        <div key={item.label} className="rounded-2xl bg-white/5 px-3 py-3">
-                          <div className="text-sm font-medium text-white">{item.label}</div>
-                          <div className="mt-1 text-lg font-semibold text-slate-100">
-                            {item.value === null ? "N/A" : `${formatNumber(item.value, item.unit === "%" ? 1 : 0)}${item.unit ?? ""}`}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-400">{item.note}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Data Quality Caveats</div>
-                    <div className="mt-2 space-y-2">
-                      {snapshot.dataQualityCaveats.length > 0 ? (
-                        snapshot.dataQualityCaveats.map((item) => (
-                          <div key={item} className="rounded-2xl bg-white/5 px-3 py-2 text-sm text-slate-300">{item}</div>
-                        ))
-                      ) : (
-                        <div className="rounded-2xl bg-white/5 px-3 py-2 text-sm text-slate-400">No material data quality caveats were elevated for this slice.</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Operational Signals" subtitle="Top movers, at-risk cameras, and trend notes selected for the report prompt.">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Ops Highlights</div>
-                    {snapshot.opsHighlights.map((item) => (
-                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">{item.name}</div>
-                          {item.status ? <div className="text-xs uppercase tracking-[0.14em] text-amber-200">{titleCase(item.status)}</div> : null}
-                        </div>
-                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Advanced Highlights</div>
-                    {snapshot.advancedHighlights.map((item) => (
-                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
-                        <div className="text-sm font-medium text-white">{item.name}</div>
-                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">At-Risk Cameras</div>
-                    {(snapshot.atRiskCameras.length > 0 ? snapshot.atRiskCameras : snapshot.topCameras).map((item) => (
-                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">{item.name}</div>
-                          {item.status ? <div className="text-xs uppercase tracking-[0.14em] text-amber-200">{titleCase(item.status)}</div> : null}
-                        </div>
-                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Trend Notes</div>
-                    {snapshot.trends.map((trend) => (
-                      <div key={trend.label} className="rounded-2xl bg-white/5 px-3 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">{trend.label}</div>
-                          <div className="text-sm font-semibold text-slate-200">
-                            {trend.deltaPct === null ? "N/A" : `${trend.deltaPct > 0 ? "+" : ""}${formatNumber(trend.deltaPct, 1)}%`}
-                          </div>
-                        </div>
-                        <div className="mt-2 text-sm text-slate-400">{trend.note}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </SectionCard>
-            </div>
-          ) : null}
         </>
       ) : (
         <QueryState
-          title={
+          title={visibleStatus === "error" ? "Report generation failed" : "Ready to generate operational briefing"}
+          detail={
             visibleStatus === "error"
-              ? "Report generation failed"
-              : visibleStatus === "idle"
-                ? "No report cached yet"
-                : "Generating operational briefing"
+              ? visibleReason ?? phaseDescription.error
+              : "Overview and Advanced analytics inputs are loaded. Generate a compact, grounded report from the current filter state."
           }
-          detail={visibleReason ?? phaseDescription[visiblePhase]}
           action={
-            <button
-              type="button"
-              className={actionButtonClass}
-              onClick={() => regenerateMutation.mutate()}
-              disabled={regenerateMutation.isPending || isReportsDisabled}
-            >
-              {regenerateMutation.isPending ? "Regenerating…" : visibleStatus === "idle" ? "Generate report" : "Retry generation"}
+            <button type="button" className={actionButtonClass} onClick={() => generateMutation.mutate()} disabled={!canGenerate}>
+              {generateMutation.isPending ? "Generating…" : inputsReady ? "Generate report" : "Loading analytics inputs…"}
             </button>
           }
         />
       )}
 
-      <SectionCard
-        title="Generation Status"
-        subtitle={
-          isEphemeralMode
-            ? "Current request diagnostics for direct on-demand report generation."
-            : "Current backend phase and any available diagnostics for this filter state."
-        }
-      >
+      <SectionCard title="Generation Status" subtitle="Current analytics input and report-generation diagnostics.">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-2xl bg-white/5 p-4">
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Status</div>
@@ -501,16 +328,16 @@ export const ReportsPage = () => {
           </div>
           <div className="rounded-2xl bg-white/5 p-4">
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Reports Cache Key</div>
-            <div className="mt-2 text-sm text-white">{reportState?.cacheKey ? `${reportState.cacheKey.slice(0, 12)}…` : "Not available yet"}</div>
+            <div className="mt-2 text-sm text-white">{generatedReport?.snapshotHash ? `${generatedReport.snapshotHash.slice(0, 12)}…` : "Not available yet"}</div>
           </div>
           <div className="rounded-2xl bg-white/5 p-4">
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Latest Error</div>
-            <div className="mt-2 text-sm text-white">{statusRecord?.debug?.lastErrorMessage ?? visibleReason ?? "None"}</div>
+            <div className="mt-2 text-sm text-white">{generatedReport?.debug?.lastErrorMessage ?? visibleReason ?? "None"}</div>
           </div>
         </div>
 
         {timingEntries.length > 0 ? (
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {timingEntries.map(([label, value]) => (
               <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
@@ -522,28 +349,112 @@ export const ReportsPage = () => {
       </SectionCard>
 
       {snapshot ? (
-        <SectionCard title="Snapshot Context" subtitle="Filter-aware summary of the analytics state used for this report.">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl bg-white/5 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Date Range</div>
-              <div className="mt-2 text-sm text-white">{snapshot.dateRange.startDate} to {snapshot.dateRange.endDate}</div>
-            </div>
-            <div className="rounded-2xl bg-white/5 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Camera Filter</div>
-              <div className="mt-2 text-sm text-white">{snapshot.filters.camera_name.length > 0 ? `${snapshot.filters.camera_name.length} selected` : "All cameras"}</div>
-            </div>
-            <div className="rounded-2xl bg-white/5 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Average Voltage</div>
-              <div className="mt-2 text-sm text-white">{formatNullableNumber(snapshot.overviewMetrics.find((item) => item.label === "Avg voltage")?.value ?? null, 2, "v")}</div>
-            </div>
-            <div className="rounded-2xl bg-white/5 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Avg Processing Lag</div>
-              <div className="mt-2 text-sm text-white">
-                {formatDurationShort(snapshot.overviewMetrics.find((item) => item.label === "Avg processing lag")?.value ?? null)}
+        <>
+          <SectionCard title="Snapshot Context" subtitle="Compact analytics bundle that will be sent to the report model.">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Date Range</div>
+                <div className="mt-2 text-sm text-white">{snapshot.dateRange.startDate} to {snapshot.dateRange.endDate}</div>
+              </div>
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Camera Filter</div>
+                <div className="mt-2 text-sm text-white">{snapshot.filters.camera_name.length > 0 ? `${snapshot.filters.camera_name.length} selected` : "All cameras"}</div>
+              </div>
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Average Voltage</div>
+                <div className="mt-2 text-sm text-white">{formatNullableNumber(snapshot.overviewMetrics.find((item) => item.label === "Avg voltage")?.value ?? null, 2, "v")}</div>
+              </div>
+              <div className="rounded-2xl bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Avg Processing Lag</div>
+                <div className="mt-2 text-sm text-white">
+                  {formatDurationShort(snapshot.overviewMetrics.find((item) => item.label === "Avg processing lag")?.value ?? null)}
+                </div>
               </div>
             </div>
+          </SectionCard>
+
+          <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+            <SectionCard title="Overview Signals" subtitle="Summary inputs from the current Overview and Ops analytics state.">
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Overview Highlights</div>
+                  <div className="mt-2 space-y-2">
+                    {snapshot.overviewHighlights.map((item) => (
+                      <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                        <div className="text-sm font-medium text-white">{item.name}</div>
+                        <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Pipeline</div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {snapshot.pipeline.map((item) => (
+                      <div key={item.label} className="rounded-2xl bg-white/5 px-3 py-3">
+                        <div className="text-sm font-medium text-white">{item.label}</div>
+                        <div className="mt-1 text-lg font-semibold text-slate-100">
+                          {item.value === null ? "N/A" : `${formatNumber(item.value, item.unit === "%" ? 1 : 0)}${item.unit ?? ""}`}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">{item.note}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Advanced Signals" subtitle="Compact evidence selected for report generation, not raw chart dumps.">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Ops Highlights</div>
+                  {snapshot.opsHighlights.map((item) => (
+                    <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-white">{item.name}</div>
+                        {item.status ? <div className="text-xs uppercase tracking-[0.14em] text-amber-200">{titleCase(item.status)}</div> : null}
+                      </div>
+                      <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Advanced Highlights</div>
+                  {snapshot.advancedHighlights.map((item) => (
+                    <div key={item.name} className="rounded-2xl bg-white/5 px-3 py-3">
+                      <div className="text-sm font-medium text-white">{item.name}</div>
+                      <div className="mt-2 text-sm text-slate-400">{item.detail}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Data Quality Caveats</div>
+                  {(snapshot.dataQualityCaveats.length > 0 ? snapshot.dataQualityCaveats : ["No material data quality caveats were elevated for this slice."]).map((item) => (
+                    <div key={item} className="rounded-2xl bg-white/5 px-3 py-2 text-sm text-slate-300">{item}</div>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Trend Notes</div>
+                  {snapshot.trends.map((trend) => (
+                    <div key={trend.label} className="rounded-2xl bg-white/5 px-3 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-white">{trend.label}</div>
+                        <div className="text-sm font-semibold text-slate-200">
+                          {trend.deltaPct === null ? "N/A" : `${trend.deltaPct > 0 ? "+" : ""}${formatNumber(trend.deltaPct, 1)}%`}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-sm text-slate-400">{trend.note}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </SectionCard>
           </div>
-        </SectionCard>
+        </>
       ) : null}
     </AppShell>
   );
