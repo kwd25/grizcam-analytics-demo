@@ -3,8 +3,9 @@ import test from "node:test";
 import { buildReportSnapshot, type DashboardFilters, type OperationalReport, type ReportSnapshotSummary } from "@grizcam/shared";
 import { appConfig } from "../config.js";
 import { createOpenRouterReportClient } from "./openrouter.js";
+import { ReportServiceError } from "./errors.js";
 import { hashReportSnapshot } from "./snapshot.js";
-import { selectLatestReportView } from "./service.js";
+import { selectLatestReportView, triggerReportGeneration } from "./service.js";
 import type { StoredReportRow } from "./storage.js";
 
 const filters: DashboardFilters = {
@@ -60,6 +61,11 @@ const validReport: OperationalReport = {
     }
   ],
   open_questions: ["Are the top anomaly cameras also the ones with the most recent coverage gaps?"]
+};
+
+type CapturedOpenRouterRequest = {
+  messages?: Array<{ content?: string }>;
+  max_tokens?: number;
 };
 
 const snapshot: ReportSnapshotSummary = {
@@ -234,6 +240,8 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
   assert.ok(assembled.advancedHighlights.length > 0);
   assert.ok(assembled.dataQualityCaveats.some((item) => item.includes("Voltage coverage")));
   assert.ok(assembled.narrativeContext.some((item) => item.includes("stale camera")));
+  assert.ok(JSON.stringify(assembled).length < 12_000);
+  assert.ok(!JSON.stringify(assembled).includes("image_blob_url"));
 });
 
 test("hashReportSnapshot is stable for equivalent snapshots", () => {
@@ -273,16 +281,23 @@ test("selectLatestReportView returns stale content while a newer job refreshes",
 test("report client repairs malformed JSON once", async () => {
   const originalKey = appConfig.openRouterApiKey;
   const originalFetch = globalThis.fetch;
+  const originalMaxTokens = appConfig.reportMaxTokens;
   let calls = 0;
+  const requestBodies: CapturedOpenRouterRequest[] = [];
 
   appConfig.openRouterApiKey = "test-key";
-  globalThis.fetch = async () => {
+  appConfig.reportMaxTokens = 1234;
+  globalThis.fetch = async (_url, init) => {
     calls += 1;
 
     const body =
       calls === 1
         ? { choices: [{ message: { content: "{\"headline\":\"Broken\"" } }] }
         : { choices: [{ message: { content: JSON.stringify(validReport) } }] };
+
+    if (requestBodies.length === 0) {
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as CapturedOpenRouterRequest);
+    }
 
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -295,9 +310,110 @@ test("report client repairs malformed JSON once", async () => {
     const result = await client.generateReport(snapshot);
     assert.equal(result.report.headline, validReport.headline);
     assert.ok(result.timingMs.modelRequest >= 0);
+    assert.equal(result.timingMs.snapshotBytes, Buffer.byteLength(JSON.stringify(snapshot), "utf8"));
+    const firstRequestBody = requestBodies[0];
+    assert.ok(firstRequestBody);
+    assert.equal(result.timingMs.promptChars, firstRequestBody.messages?.[1]?.content?.length);
+    assert.equal(firstRequestBody.max_tokens, 1234);
+    assert.ok(!firstRequestBody.messages?.[1]?.content?.includes("\n  \"filterKey\""));
     assert.equal(calls, 2);
   } finally {
     appConfig.openRouterApiKey = originalKey;
+    appConfig.reportMaxTokens = originalMaxTokens;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client times out within the model deadline", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = appConfig.reportModelTimeoutMs;
+
+  appConfig.openRouterApiKey = "test-key";
+  appConfig.reportModelTimeoutMs = 10;
+  globalThis.fetch = async (_url, init) =>
+    await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    });
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "timeout-test", deadlineAtMs: Date.now() + 5_000 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_MODEL_TIMEOUT" &&
+        error.message.includes("timed out after")
+    );
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportModelTimeoutMs = originalTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client skips repair when the server deadline is too close", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalRepairMinRemaining = appConfig.reportRepairMinRemainingMs;
+  let calls = 0;
+
+  appConfig.openRouterApiKey = "test-key";
+  appConfig.reportRepairMinRemainingMs = 8_000;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"headline\":\"Broken\"" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "repair-skip-test", deadlineAtMs: Date.now() + 2_000 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_INVALID_MODEL_OUTPUT" &&
+        error.message.includes("not enough time left")
+    );
+    assert.equal(calls, 1);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportRepairMinRemainingMs = originalRepairMinRemaining;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("manual generation returns an ephemeral report when persistent storage is unavailable", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalReportsState = globalThis.__grizcamReportsStoreState;
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.__grizcamReportsStoreState = {
+    configured: false,
+    connectionSource: "unconfigured",
+    connected: false,
+    databaseStatus: "disabled",
+    readOnly: null,
+    schemaReady: false,
+    failureReason: "Reports storage is unavailable in this test."
+  };
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReport) } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+
+  try {
+    const result = await triggerReportGeneration(filters, snapshot, true, "ephemeral-test");
+    assert.equal(result.status, "ready");
+    assert.equal(result.report?.sourceMode, "ephemeral");
+    assert.equal(result.requestId, "ephemeral-test");
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.__grizcamReportsStoreState = originalReportsState;
     globalThis.fetch = originalFetch;
   }
 });

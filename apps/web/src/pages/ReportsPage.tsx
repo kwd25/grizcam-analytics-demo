@@ -62,6 +62,8 @@ export const ReportsPage = () => {
   const [reportStatus, setReportStatus] = useState<ReportViewStatus>("idle");
   const [reportPhase, setReportPhase] = useState<ReportPhase>("building_snapshot");
   const [reportReason, setReportReason] = useState<string | null>(null);
+  const [reportRequestId, setReportRequestId] = useState<string | null>(null);
+  const [reportErrorCode, setReportErrorCode] = useState<string | null>(null);
 
   const optionsQuery = useQuery({ queryKey: ["filter-options"], queryFn: api.filterOptions });
   const healthQuery = useQuery({
@@ -85,6 +87,8 @@ export const ReportsPage = () => {
     setReportStatus("idle");
     setReportPhase("building_snapshot");
     setReportReason(null);
+    setReportRequestId(null);
+    setReportErrorCode(null);
   }, [stableFilters]);
 
   const inputError = (overviewQuery.error as Error | null) ?? (analyticsQuery.error as Error | null);
@@ -118,18 +122,24 @@ export const ReportsPage = () => {
       setReportStatus("generating");
       setReportPhase("calling_model");
       setReportReason(null);
+      setReportRequestId(null);
+      setReportErrorCode(null);
     },
     onSuccess: (result) => {
       setGeneratedReport(result.report ?? null);
       setReportStatus(result.status);
       setReportPhase(result.phase);
       setReportReason(result.reason ?? null);
+      setReportRequestId(result.requestId ?? result.report?.debug?.requestId ?? null);
+      setReportErrorCode(result.errorCode ?? result.report?.debug?.lastErrorCode ?? null);
     },
     onError: (error) => {
       setGeneratedReport(null);
       setReportStatus("error");
       setReportPhase("error");
       setReportReason(error instanceof Error ? error.message : "Report generation failed.");
+      setReportRequestId(null);
+      setReportErrorCode(null);
     }
   });
 
@@ -138,14 +148,21 @@ export const ReportsPage = () => {
   const visibleReason = reportReason ?? (!healthQuery.data?.openRouterConfigured ? "OPENROUTER_API_KEY is not configured on the server." : null);
   const timingMs = generatedReport?.debug?.timingMs ?? {};
   const generatedBriefing = generatedReport?.report ?? null;
-  const timingEntries = [
-    ["Input load", inputLoadMs],
-    ["Model request", timingMs.modelRequest],
-    ["Validation", timingMs.validation],
-    ["Total", timingMs.total]
-  ].filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  const diagnosticEntries = [
+    { label: "Input load", value: inputLoadMs, unit: "ms" },
+    { label: "Storage check", value: timingMs.storageCheck, unit: "ms" },
+    { label: "Model request", value: timingMs.modelRequest, unit: "ms" },
+    { label: "Validation", value: timingMs.validation, unit: "ms" },
+    { label: "Persistence", value: timingMs.persistence, unit: "ms" },
+    { label: "Total", value: timingMs.total, unit: "ms" },
+    { label: "Snapshot size", value: timingMs.snapshotBytes, unit: "bytes" },
+    { label: "Prompt chars", value: timingMs.promptChars, unit: "chars" }
+  ].filter((entry): entry is { label: string; value: number; unit: string } => typeof entry.value === "number");
   const canGenerate = Boolean(snapshot) && !inputsLoading && !generateMutation.isPending && healthQuery.data?.openRouterConfigured !== false;
   const hasStorageWarning = healthQuery.data && !healthQuery.data.reportsEnabled && healthQuery.data.supportsEphemeralGeneration;
+  const storageWarningDetail = healthQuery.data?.reportsFailureReason ?? "You can still generate a report manually from the loaded analytics inputs.";
+  const visibleRequestId = reportRequestId ?? generatedReport?.debug?.requestId ?? null;
+  const visibleErrorCode = reportErrorCode ?? generatedReport?.debug?.lastErrorCode ?? null;
 
   return (
     <AppShell
@@ -156,7 +173,7 @@ export const ReportsPage = () => {
     >
       {hasStorageWarning ? (
         <div className="rounded-3xl border border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100">
-          Persistent report storage is unavailable. You can still generate a report manually from the loaded analytics inputs.
+          Persistent report storage is unavailable. {storageWarningDetail} Manual generation will use the loaded analytics inputs without waiting on storage.
         </div>
       ) : null}
 
@@ -166,7 +183,7 @@ export const ReportsPage = () => {
         </div>
       ) : null}
 
-      {inputsLoading || healthQuery.isLoading ? (
+      {inputsLoading ? (
         <QueryState title="Loading report inputs" detail="Fetching Overview and Advanced analytics for the current filter state before report generation is enabled." />
       ) : inputError ? (
         <QueryState
@@ -336,12 +353,28 @@ export const ReportsPage = () => {
           </div>
         </div>
 
-        {timingEntries.length > 0 ? (
+        {visibleRequestId || visibleErrorCode ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Request ID</div>
+              <div className="mt-2 text-sm text-white">{visibleRequestId ?? "Not available"}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Error Code</div>
+              <div className="mt-2 text-sm text-white">{visibleErrorCode ?? "None"}</div>
+            </div>
+          </div>
+        ) : null}
+
+        {diagnosticEntries.length > 0 ? (
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {timingEntries.map(([label, value]) => (
+            {diagnosticEntries.map(({ label, value, unit }) => (
               <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
-                <div className="mt-2 text-lg font-semibold text-white">{formatNumber(value, 0)}ms</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {formatNumber(value, 0)}
+                  {unit === "ms" ? "ms" : ` ${unit}`}
+                </div>
               </div>
             ))}
           </div>

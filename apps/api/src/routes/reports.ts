@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { triggerReportRequestSchema } from "@grizcam/shared";
 import { getLatestReport, getReportStatus, getReportsHealth, triggerReportGeneration } from "../reports/service.js";
@@ -18,6 +19,42 @@ reportsRouter.get("/status", async (request, response) => {
 });
 
 reportsRouter.post("/generate", async (request, response) => {
-  const payload = triggerReportRequestSchema.parse(request.body);
-  response.status(202).json(await triggerReportGeneration(payload.filters, payload.snapshot, payload.force));
+  const requestId = randomUUID();
+  const parsed = triggerReportRequestSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({
+      status: "error",
+      phase: "error",
+      cacheKey: null,
+      reportId: "unavailable",
+      isExactMatch: false,
+      report: null,
+      reason: "The report request payload is invalid.",
+      errorCode: "REPORT_INPUT_INVALID",
+      requestId
+    });
+    return;
+  }
+
+  try {
+    response.status(200).json(await triggerReportGeneration(parsed.data.filters, parsed.data.snapshot, parsed.data.force, requestId));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Report generation failed.";
+    console.error("reports.generate.route", {
+      requestId,
+      message
+    });
+    response.status(200).json({
+      status: "error",
+      phase: "error",
+      cacheKey: null,
+      reportId: "unavailable",
+      isExactMatch: false,
+      report: null,
+      reason: message,
+      errorCode: "REPORT_MODEL_UNAVAILABLE",
+      requestId
+    });
+  }
 });

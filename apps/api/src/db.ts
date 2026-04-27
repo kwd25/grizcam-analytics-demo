@@ -111,15 +111,16 @@ export const verifyDatabaseConnection = async () => {
 
 export const ensureReportsStoreReady = async (): Promise<ReportsStoreState> => {
   const currentState = getReportsStoreState();
-  const hasSettledFailure =
-    currentState.failureReason !== null && currentState.failureReason !== "Reports storage has not been initialized yet.";
+  const hasSettledNonTransientFailure =
+    currentState.failureReason !== null &&
+    currentState.failureReason !== "Reports storage has not been initialized yet." &&
+    currentState.databaseStatus !== "unavailable";
 
   if (
     reportsStoreReady() ||
     !currentState.configured ||
     currentState.readOnly === true ||
-    currentState.databaseStatus === "unavailable" ||
-    hasSettledFailure
+    hasSettledNonTransientFailure
   ) {
     return currentState;
   }

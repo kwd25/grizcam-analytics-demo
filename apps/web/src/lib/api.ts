@@ -147,8 +147,10 @@ const postJson = async <T>(path: string, body: unknown, timeoutMs = QUERY_REQUES
 
     if (!response.ok) {
       const message =
-        payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
-          ? (payload as { error: string }).error
+        payload && typeof payload === "object" && "reason" in payload && typeof (payload as { reason?: unknown }).reason === "string"
+          ? (payload as { reason: string }).reason
+          : payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
+            ? (payload as { error: string }).error
           : `Request failed: ${response.status}`;
       throw new QueryRequestError("INVALID_RESPONSE", message);
     }
