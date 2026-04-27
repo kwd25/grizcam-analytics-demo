@@ -6,10 +6,18 @@ type OpenRouterChoice = {
   message?: {
     content?: string | Array<{ type?: string; text?: string }>;
   };
+  finish_reason?: string | null;
+  native_finish_reason?: string | null;
 };
 
 type OpenRouterResponse = {
   choices?: OpenRouterChoice[];
+};
+
+type OpenRouterResult = {
+  content: string;
+  finishReason: string | null;
+  nativeFinishReason: string | null;
 };
 
 export type ReportGenerationResult = {
@@ -76,24 +84,109 @@ const REPAIR_PROMPT = `Repair the prior response into valid JSON matching the re
 
 Rules:
 - Preserve the original meaning where possible.
-- Use only the supplied snapshot and prior response.
+- Use only the prior response.
 - Output JSON only.
 - Do not add markdown fences or commentary.`;
 
-const extractMessageContent = (payload: OpenRouterResponse) => {
-  const content = payload.choices?.[0]?.message?.content;
+const OPERATIONAL_REPORT_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["headline", "executive_summary", "key_findings", "recommended_actions", "risks_or_watchouts", "open_questions"],
+  properties: {
+    headline: { type: "string", minLength: 1, maxLength: 240 },
+    executive_summary: {
+      type: "array",
+      minItems: 2,
+      maxItems: 4,
+      items: { type: "string", minLength: 1, maxLength: 320 }
+    },
+    key_findings: {
+      type: "array",
+      minItems: 2,
+      maxItems: 6,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "evidence", "confidence", "actionability"],
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 240 },
+          evidence: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            items: { type: "string", minLength: 1, maxLength: 320 }
+          },
+          confidence: { type: "string", enum: ["low", "medium", "high"] },
+          actionability: { type: "string", minLength: 1, maxLength: 320 }
+        }
+      }
+    },
+    recommended_actions: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["priority", "action", "why"],
+        properties: {
+          priority: { type: "integer", minimum: 1, maximum: 5 },
+          action: { type: "string", minLength: 1, maxLength: 240 },
+          why: { type: "string", minLength: 1, maxLength: 320 }
+        }
+      }
+    },
+    risks_or_watchouts: {
+      type: "array",
+      minItems: 0,
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "impact", "suggested_followup"],
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 240 },
+          impact: { type: "string", minLength: 1, maxLength: 320 },
+          suggested_followup: { type: "string", minLength: 1, maxLength: 320 }
+        }
+      }
+    },
+    open_questions: {
+      type: "array",
+      minItems: 0,
+      maxItems: 5,
+      items: { type: "string", minLength: 1, maxLength: 240 }
+    }
+  }
+} as const;
+
+const extractOpenRouterResult = (payload: OpenRouterResponse): OpenRouterResult => {
+  const choice = payload.choices?.[0];
+  const content = choice?.message?.content;
   if (typeof content === "string") {
-    return content;
+    return {
+      content,
+      finishReason: choice?.finish_reason ?? null,
+      nativeFinishReason: choice?.native_finish_reason ?? null
+    };
   }
 
   if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part?.text === "string" ? part.text : ""))
-      .join("")
-      .trim();
+    return {
+      content: content
+        .map((part) => (typeof part?.text === "string" ? part.text : ""))
+        .join("")
+        .trim(),
+      finishReason: choice?.finish_reason ?? null,
+      nativeFinishReason: choice?.native_finish_reason ?? null
+    };
   }
 
-  return "";
+  return {
+    content: "",
+    finishReason: choice?.finish_reason ?? null,
+    nativeFinishReason: choice?.native_finish_reason ?? null
+  };
 };
 
 const stripJsonFences = (raw: string) =>
@@ -114,6 +207,23 @@ const extractJsonObject = (raw: string) => {
 const parseReport = (raw: string): OperationalReport => {
   const parsed = JSON.parse(extractJsonObject(stripJsonFences(raw)));
   return operationalReportSchema.parse(parsed);
+};
+
+const isTruncatedFinishReason = (reason: string | null | undefined) => {
+  const normalized = reason?.toLowerCase();
+  return normalized === "length" || normalized === "max_tokens" || normalized === "max_completion_tokens" || normalized === "token_limit";
+};
+
+const throwIfTruncated = (result: OpenRouterResult, phase: "initial" | "repair") => {
+  if (!isTruncatedFinishReason(result.finishReason) && !isTruncatedFinishReason(result.nativeFinishReason)) {
+    return;
+  }
+
+  throw new ReportServiceError(
+    "REPORT_INVALID_MODEL_OUTPUT",
+    `The report model response was truncated before valid JSON completed during ${phase} generation; increase REPORT_MAX_TOKENS or reduce output size.`,
+    "validating_response"
+  );
 };
 
 const remainingDeadlineMs = (deadlineAtMs?: number) => (deadlineAtMs ? deadlineAtMs - Date.now() : Number.POSITIVE_INFINITY);
@@ -170,7 +280,16 @@ const callOpenRouter = async (
         model: appConfig.openRouterModel,
         messages,
         temperature: 0.2,
-        max_tokens: appConfig.reportMaxTokens
+        max_tokens: appConfig.reportMaxTokens,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "operational_report",
+            strict: true,
+            schema: OPERATIONAL_REPORT_JSON_SCHEMA
+          }
+        },
+        plugins: [{ id: "response-healing" }]
       }),
       signal: controller.signal
     });
@@ -200,15 +319,21 @@ const callOpenRouter = async (
     throw new ReportServiceError("REPORT_MODEL_UNAVAILABLE", "The report generation service is unavailable right now.", "calling_model");
   }
 
+  const payload = (await response.json()) as OpenRouterResponse;
+  const result = extractOpenRouterResult(payload);
+
   console.log("reports.model.end", {
     requestId: options.requestId ?? null,
     phase: options.phase,
     model: appConfig.openRouterModel,
     elapsedMs,
-    status: response.status
+    status: response.status,
+    responseChars: result.content.length,
+    finishReason: result.finishReason,
+    nativeFinishReason: result.nativeFinishReason
   });
 
-  return extractMessageContent((await response.json()) as OpenRouterResponse);
+  return result;
 };
 
 export const createOpenRouterReportClient = (): ReportModelClient => ({
@@ -225,7 +350,7 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
 
     const firstModelStartedAt = Date.now();
     timingMs.modelCalls += 1;
-    const raw = await callOpenRouter([
+    const rawResult = await callOpenRouter([
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: userPrompt }
     ], { ...options, phase: "initial", promptChars: userPrompt.length });
@@ -233,7 +358,8 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
 
     const firstValidationStartedAt = Date.now();
     try {
-      const report = parseReport(raw);
+      throwIfTruncated(rawResult, "initial");
+      const report = parseReport(rawResult.content);
       timingMs.validation += Date.now() - firstValidationStartedAt;
       return { report, timingMs };
     } catch (error) {
@@ -248,10 +374,10 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
         );
       }
 
-      const repairPrompt = `Snapshot:\n${snapshotJson}\n\nOriginal response:\n${raw}`;
+      const repairPrompt = `Original response:\n${rawResult.content}`;
       const repairModelStartedAt = Date.now();
       timingMs.modelCalls += 1;
-      const repaired = await callOpenRouter([
+      const repairedResult = await callOpenRouter([
         { role: "system", content: REPAIR_PROMPT },
         {
           role: "user",
@@ -262,7 +388,8 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
 
       const repairValidationStartedAt = Date.now();
       try {
-        const report = parseReport(repaired);
+        throwIfTruncated(repairedResult, "repair");
+        const report = parseReport(repairedResult.content);
         timingMs.validation += Date.now() - repairValidationStartedAt;
         return { report, timingMs };
       } catch {
