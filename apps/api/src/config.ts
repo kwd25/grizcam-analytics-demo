@@ -85,7 +85,7 @@ export const appConfig = {
   reportModelTimeoutMs: parseNumber(process.env.REPORT_MODEL_TIMEOUT_MS, 45_000),
   reportGenerationTimeoutMs: parseNumber(process.env.REPORT_GENERATION_TIMEOUT_MS, 50_000),
   reportRepairMinRemainingMs: parseNumber(process.env.REPORT_REPAIR_MIN_REMAINING_MS, 8_000),
-  reportMaxTokens: parseNumber(process.env.REPORT_MAX_TOKENS, 1_600),
+  reportMaxTokens: parseNumber(process.env.REPORT_MAX_TOKENS, 3_500),
   reportPromptVersion: process.env.REPORT_PROMPT_VERSION ?? "v1",
   reportsEnabled: Boolean(reportsPostgres),
   reportsConnectionSource,

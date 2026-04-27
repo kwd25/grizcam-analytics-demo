@@ -66,6 +66,17 @@ const validReport: OperationalReport = {
 type CapturedOpenRouterRequest = {
   messages?: Array<{ content?: string }>;
   max_tokens?: number;
+  response_format?: {
+    type?: string;
+    json_schema?: {
+      name?: string;
+      strict?: boolean;
+      schema?: {
+        required?: string[];
+      };
+    };
+  };
+  plugins?: Array<{ id?: string }>;
 };
 
 const snapshot: ReportSnapshotSummary = {
@@ -315,8 +326,53 @@ test("report client repairs malformed JSON once", async () => {
     assert.ok(firstRequestBody);
     assert.equal(result.timingMs.promptChars, firstRequestBody.messages?.[1]?.content?.length);
     assert.equal(firstRequestBody.max_tokens, 1234);
+    assert.equal(firstRequestBody.response_format?.type, "json_schema");
+    assert.equal(firstRequestBody.response_format?.json_schema?.name, "operational_report");
+    assert.equal(firstRequestBody.response_format?.json_schema?.strict, true);
+    assert.ok(firstRequestBody.response_format?.json_schema?.schema?.required?.includes("key_findings"));
+    assert.ok(firstRequestBody.plugins?.some((plugin) => plugin.id === "response-healing"));
     assert.ok(!firstRequestBody.messages?.[1]?.content?.includes("\n  \"filterKey\""));
     assert.equal(calls, 2);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportMaxTokens = originalMaxTokens;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client identifies truncated model JSON", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalMaxTokens = appConfig.reportMaxTokens;
+
+  assert.ok(appConfig.reportMaxTokens >= 3500);
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "length",
+            native_finish_reason: "max_tokens",
+            message: { content: "{\"headline\":\"Truncated\",\"executive_summary\":[\"one\"" }
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "truncated-test", deadlineAtMs: Date.now() + 5_000 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_INVALID_MODEL_OUTPUT" &&
+        error.message.includes("truncated before valid JSON completed")
+    );
   } finally {
     appConfig.openRouterApiKey = originalKey;
     appConfig.reportMaxTokens = originalMaxTokens;
