@@ -200,14 +200,14 @@ const buildDataQualityCaveats = (analytics: AnalyticsLabResponse): string[] => {
 };
 
 const buildOverviewHighlights = (overview: OverviewResponse): ReportSnapshotItem[] => {
-  const totalGroups = overview.categoryDistribution.reduce((sum, item) => sum + item.uniqueEventGroups, 0);
+  const totalGroups = overview.categoryDistribution.reduce((sum, item) => sum + item.count, 0);
   const topCategories = overview.categoryDistribution.slice(0, 3).map((item) => ({
     name: `${item.category} mix`,
-    value: item.uniqueEventGroups,
+    value: item.count,
     detail:
       totalGroups > 0
-        ? `${item.uniqueEventGroups} grouped events, ${round((item.uniqueEventGroups / totalGroups) * 100, 1)}% share in this slice.`
-        : `${item.uniqueEventGroups} grouped events in this slice.`
+        ? `${item.count} grouped events, ${round((item.count / totalGroups) * 100, 1)}% share in this slice.`
+        : `${item.count} grouped events in this slice.`
   }));
 
   const topCamera = overview.topCameras[0];

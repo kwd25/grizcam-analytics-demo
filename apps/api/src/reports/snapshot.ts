@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ReportSnapshotSummary } from "@grizcam/shared";
-import { buildReportFilterKey } from "@grizcam/shared";
+import { buildReportFilterKey, normalizeReportFilters } from "@grizcam/shared";
 
 const stableSerialize = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -23,6 +23,7 @@ export const hashReportSnapshot = (snapshot: ReportSnapshotSummary, promptVersio
       stableSerialize({
         snapshot: {
           ...snapshot,
+          filters: normalizeReportFilters(snapshot.filters),
           filterKey: buildReportFilterKey(snapshot.filters)
         },
         promptVersion,

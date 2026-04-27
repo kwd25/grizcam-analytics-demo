@@ -165,7 +165,10 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
         { date: "2025-01-02", avgUploadLagSeconds: 420, avgAiLagSeconds: 260, avgProcessingLagSeconds: 880 }
       ],
       staleCameras: [{ cameraName: "South Ridge", lastSeen: "2025-01-28T06:00:00", lastSeenHoursAgo: 76, status: "warning", anomalyScore: 71.2 }],
-      categoryDistribution: [],
+      categoryDistribution: [
+        { category: "wildlife", count: 90 },
+        { category: "human", count: 30 }
+      ],
       categoryTrend: [
         { date: "2025-01-01", wildlife: 20, human: 5, vehicle: 1, emptyScene: 2, unknown: 0 },
         { date: "2025-01-02", wildlife: 25, human: 3, vehicle: 0, emptyScene: 1, unknown: 0 }
@@ -223,6 +226,10 @@ test("buildReportSnapshot selects compact operator-focused signals", () => {
   assert.equal(assembled.topCameras.length, 2);
   assert.equal(assembled.atRiskCameras[0]?.name, "South Ridge");
   assert.ok(assembled.overviewHighlights.length > 0);
+  assert.deepEqual(assembled.overviewHighlights.slice(1, 3), [
+    { name: "wildlife mix", value: 90, detail: "90 grouped events, 75% share in this slice." },
+    { name: "human mix", value: 30, detail: "30 grouped events, 25% share in this slice." }
+  ]);
   assert.ok(assembled.opsHighlights.length > 0);
   assert.ok(assembled.advancedHighlights.length > 0);
   assert.ok(assembled.dataQualityCaveats.some((item) => item.includes("Voltage coverage")));
