@@ -65,7 +65,7 @@ const reportsPostgres =
         connectionString: reportsDatabaseUrl,
         ssl: isProduction ? { rejectUnauthorized: false } : undefined
       }
-    : reportsConnectionSource === "database_url"
+    : databaseUrl && reportsConnectionSource !== "local_postgres" && reportsConnectionSource !== "unconfigured"
       ? {
           connectionString: databaseUrl,
           ssl: isProduction ? { rejectUnauthorized: false } : undefined
