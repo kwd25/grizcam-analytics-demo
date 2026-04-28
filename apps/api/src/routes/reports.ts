@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { triggerReportRequestSchema } from "@grizcam/shared";
+import { toReportServiceError } from "../reports/errors.js";
 import { getLatestReport, getReportStatus, getReportsHealth, triggerReportGeneration } from "../reports/service.js";
 import { parseFilters } from "../utils/requests.js";
 
@@ -40,20 +41,22 @@ reportsRouter.post("/generate", async (request, response) => {
   try {
     response.status(200).json(await triggerReportGeneration(parsed.data.filters, parsed.data.snapshot, parsed.data.force, requestId));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Report generation failed.";
+    const reportError = toReportServiceError(error);
     console.error("reports.generate.route", {
       requestId,
-      message
+      errorCode: reportError.code,
+      phase: reportError.phase,
+      message: reportError.message
     });
     response.status(200).json({
       status: "error",
-      phase: "error",
+      phase: reportError.phase,
       cacheKey: null,
       reportId: "unavailable",
       isExactMatch: false,
       report: null,
-      reason: message,
-      errorCode: "REPORT_MODEL_UNAVAILABLE",
+      reason: reportError.message,
+      errorCode: reportError.code,
       requestId
     });
   }

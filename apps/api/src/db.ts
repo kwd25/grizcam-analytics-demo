@@ -2,7 +2,14 @@ import { Pool } from "pg";
 import { appConfig } from "./config.js";
 import { REPORTS_TABLE_SQL } from "./reports/schema.js";
 
-export type ReportsConnectionSource = "reports_database_url" | "database_url" | "local_postgres" | "unconfigured";
+export type ReportsConnectionSource =
+  | "reports_database_url"
+  | "database_url"
+  | "postgres_url"
+  | "postgres_prisma_url"
+  | "postgres_url_non_pooling"
+  | "local_postgres"
+  | "unconfigured";
 export type ReportsStoreState = {
   configured: boolean;
   connectionSource: ReportsConnectionSource;
@@ -41,6 +48,9 @@ export const reportsPool = appConfig.reportsPostgres
 const connectionSourceLabel: Record<ReportsConnectionSource, string> = {
   reports_database_url: "REPORTS_DATABASE_URL",
   database_url: "DATABASE_URL",
+  postgres_url: "POSTGRES_URL",
+  postgres_prisma_url: "POSTGRES_PRISMA_URL",
+  postgres_url_non_pooling: "POSTGRES_URL_NON_POOLING",
   local_postgres: "local Postgres config",
   unconfigured: "unconfigured reports connection"
 };
