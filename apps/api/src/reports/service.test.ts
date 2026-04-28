@@ -386,6 +386,115 @@ test("report client identifies truncated model JSON", async () => {
   }
 });
 
+test("report client trims overlong report arrays without a repair call", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const overlongReport = {
+    ...validReport,
+    executive_summary: [
+      ...validReport.executive_summary,
+      "Keep manager-facing commentary concise even when the model has more to say.",
+      "This extra summary item should be removed deterministically."
+    ],
+    key_findings: Array.from({ length: 8 }, (_, index) => ({
+      title: `Finding ${index + 1}`,
+      evidence: [
+        `Evidence ${index + 1}.1`,
+        `Evidence ${index + 1}.2`,
+        `Evidence ${index + 1}.3`,
+        `Evidence ${index + 1}.4`
+      ],
+      confidence: index % 2 === 0 ? "high" : "medium",
+      actionability: `Actionability ${index + 1}`
+    })),
+    recommended_actions: Array.from({ length: 6 }, (_, index) => ({
+      priority: index + 1,
+      action: `Action ${index + 1}`,
+      why: `Reason ${index + 1}`
+    })),
+    risks_or_watchouts: Array.from({ length: 6 }, (_, index) => ({
+      title: `Risk ${index + 1}`,
+      impact: `Impact ${index + 1}`,
+      suggested_followup: `Follow-up ${index + 1}`
+    })),
+    open_questions: Array.from({ length: 7 }, (_, index) => `Question ${index + 1}?`)
+  };
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(overlongReport) } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    const result = await client.generateReport(snapshot, { requestId: "overlong-test", deadlineAtMs: Date.now() + 2_000 });
+    assert.equal(calls, 1);
+    assert.equal(result.report.executive_summary.length, 4);
+    assert.equal(result.report.key_findings.length, 6);
+    assert.equal(result.report.key_findings[0]?.evidence.length, 3);
+    assert.equal(result.report.recommended_actions.length, 5);
+    assert.equal(result.report.recommended_actions[4]?.priority, 5);
+    assert.equal(result.report.risks_or_watchouts.length, 5);
+    assert.equal(result.report.open_questions.length, 5);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client returns concise validation errors after normalization", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalRepairMinRemaining = appConfig.reportRepairMinRemainingMs;
+
+  appConfig.openRouterApiKey = "test-key";
+  appConfig.reportRepairMinRemainingMs = 8_000;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                ...validReport,
+                executive_summary: ["Only one summary item remains invalid after normalization."],
+                key_findings: [],
+                recommended_actions: [{ priority: "first", action: "", why: "" }]
+              })
+            }
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "concise-validation-test", deadlineAtMs: Date.now() + 2_000 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_INVALID_MODEL_OUTPUT" &&
+        error.message.includes("required report schema") &&
+        error.message.includes("executive_summary") &&
+        !error.message.includes('"origin"') &&
+        !error.message.includes("Only one summary item remains invalid")
+    );
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportRepairMinRemainingMs = originalRepairMinRemaining;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 const providerFailureScenarios = [
   {
     status: 401,

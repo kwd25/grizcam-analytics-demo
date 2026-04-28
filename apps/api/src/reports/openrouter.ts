@@ -1,4 +1,5 @@
 import { operationalReportSchema, type OperationalReport, type ReportSnapshotSummary } from "@grizcam/shared";
+import { ZodError } from "zod";
 import { appConfig } from "../config.js";
 import { ReportServiceError } from "./errors.js";
 
@@ -56,6 +57,8 @@ type ReportGenerationOptions = {
   deadlineAtMs?: number;
 };
 
+type UnknownRecord = Record<string, unknown>;
+
 const SYSTEM_PROMPT = `You are generating an operations briefing for GrizCam analytics.
 
 Rules:
@@ -66,6 +69,8 @@ Rules:
 - Prefer concise operator / manager language over chatbot phrasing.
 - Emphasize operational awareness, actionable recommendations, cautious trend interpretation, anomalies, risks, and opportunities.
 - Keep all evidence grounded in the provided counts, percentages, and trend notes.
+- Keep the report compact: 2-4 executive summary bullets, 2-6 key findings, 1-5 recommended actions, 0-5 risks/watchouts, and 0-5 open questions.
+- Each key finding may include 1-3 evidence bullets.
 - Return JSON only with exactly this shape:
 {
   "headline": "string",
@@ -220,9 +225,99 @@ const extractJsonObject = (raw: string) => {
   return raw;
 };
 
-const parseReport = (raw: string): OperationalReport => {
+const isRecord = (value: unknown): value is UnknownRecord => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const pathLabel = (path: Array<string | number | symbol>) => (path.length > 0 ? path.map(String).join(".") : "root");
+
+const summarizeModelOutputError = (error: unknown) => {
+  if (error instanceof ZodError) {
+    const issuePreview = error.issues
+      .slice(0, 5)
+      .map((issue) => `${pathLabel(issue.path)}: ${issue.message}`)
+      .join("; ");
+    const suffix = error.issues.length > 5 ? `; ${error.issues.length - 5} more issue(s)` : "";
+    return `The report model output did not match the required report schema (${error.issues.length} issue(s)): ${issuePreview}${suffix}.`;
+  }
+
+  return error instanceof Error ? error.message : "The report response was invalid.";
+};
+
+const limitArray = (record: UnknownRecord, key: string, maxLength: number, adjustments: Record<string, number>) => {
+  const value = record[key];
+  if (!Array.isArray(value) || value.length <= maxLength) {
+    return value;
+  }
+
+  adjustments[key] = value.length - maxLength;
+  return value.slice(0, maxLength);
+};
+
+const normalizePriority = (value: unknown, adjustments: Record<string, number>) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return value;
+  }
+
+  const normalized = Math.min(5, Math.max(1, Math.trunc(value)));
+  if (normalized !== value) {
+    adjustments.recommended_actions_priority = (adjustments.recommended_actions_priority ?? 0) + 1;
+  }
+  return normalized;
+};
+
+const normalizeReportCandidate = (candidate: unknown) => {
+  if (!isRecord(candidate)) {
+    return { candidate, adjustments: {} as Record<string, number> };
+  }
+
+  const adjustments: Record<string, number> = {};
+  const normalized: UnknownRecord = { ...candidate };
+
+  normalized.executive_summary = limitArray(normalized, "executive_summary", 4, adjustments);
+  normalized.recommended_actions = limitArray(normalized, "recommended_actions", 5, adjustments);
+  normalized.risks_or_watchouts = limitArray(normalized, "risks_or_watchouts", 5, adjustments);
+  normalized.open_questions = limitArray(normalized, "open_questions", 5, adjustments);
+
+  if (Array.isArray(normalized.key_findings)) {
+    const limitedFindings = limitArray(normalized, "key_findings", 6, adjustments);
+    normalized.key_findings = Array.isArray(limitedFindings)
+      ? limitedFindings.map((finding) => {
+          if (!isRecord(finding)) {
+            return finding;
+          }
+          const normalizedFinding: UnknownRecord = { ...finding };
+          const evidence = limitArray(normalizedFinding, "evidence", 3, adjustments);
+          normalizedFinding.evidence = evidence;
+          return normalizedFinding;
+        })
+      : limitedFindings;
+  }
+
+  if (Array.isArray(normalized.recommended_actions)) {
+    normalized.recommended_actions = normalized.recommended_actions.map((action) => {
+      if (!isRecord(action)) {
+        return action;
+      }
+      return {
+        ...action,
+        priority: normalizePriority(action.priority, adjustments)
+      };
+    });
+  }
+
+  return { candidate: normalized, adjustments };
+};
+
+const parseReport = (raw: string, context: { requestId?: string; phase: "initial" | "repair" }): OperationalReport => {
   const parsed = JSON.parse(extractJsonObject(stripJsonFences(raw)));
-  return operationalReportSchema.parse(parsed);
+  const normalized = normalizeReportCandidate(parsed);
+  if (Object.keys(normalized.adjustments).length > 0) {
+    console.log("reports.model.normalized", {
+      requestId: context.requestId ?? null,
+      phase: context.phase,
+      adjustments: normalized.adjustments
+    });
+  }
+  return operationalReportSchema.parse(normalized.candidate);
 };
 
 const isTruncatedFinishReason = (reason: string | null | undefined) => {
@@ -475,17 +570,17 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
     const firstValidationStartedAt = Date.now();
     try {
       throwIfTruncated(rawResult, "initial");
-      const report = parseReport(rawResult.content);
+      const report = parseReport(rawResult.content, { requestId: options.requestId, phase: "initial" });
       timingMs.validation += Date.now() - firstValidationStartedAt;
       return { report, timingMs };
     } catch (error) {
       timingMs.validation += Date.now() - firstValidationStartedAt;
 
       if (remainingDeadlineMs(options.deadlineAtMs) < appConfig.reportRepairMinRemainingMs) {
-        const message = error instanceof Error ? error.message : "The report response was invalid.";
+        const message = summarizeModelOutputError(error);
         throw new ReportServiceError(
           "REPORT_INVALID_MODEL_OUTPUT",
-          `The report model returned invalid JSON and there was not enough time left to repair it safely before the server deadline. ${message}`,
+          `The report model returned invalid report output and there was not enough time left to repair it safely before the server deadline. ${message}`,
           "validating_response"
         );
       }
@@ -505,15 +600,15 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
       const repairValidationStartedAt = Date.now();
       try {
         throwIfTruncated(repairedResult, "repair");
-        const report = parseReport(repairedResult.content);
+        const report = parseReport(repairedResult.content, { requestId: options.requestId, phase: "repair" });
         timingMs.validation += Date.now() - repairValidationStartedAt;
         return { report, timingMs };
-      } catch {
+      } catch (repairError) {
         timingMs.validation += Date.now() - repairValidationStartedAt;
-        const message = error instanceof Error ? error.message : "The report response was invalid.";
+        const message = summarizeModelOutputError(repairError);
         throw new ReportServiceError(
           "REPORT_INVALID_MODEL_OUTPUT",
-          `The report model returned invalid JSON after repair. ${message}`,
+          `The report model returned invalid report output after repair. ${message}`,
           "validating_response"
         );
       }
