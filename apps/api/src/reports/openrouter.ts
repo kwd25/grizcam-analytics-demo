@@ -112,13 +112,13 @@ const OPERATIONAL_REPORT_JSON_SCHEMA = {
     headline: { type: "string", minLength: 1, maxLength: 240 },
     executive_summary: {
       type: "array",
-      minItems: 2,
+      minItems: 1,
       maxItems: 4,
       items: { type: "string", minLength: 1, maxLength: 320 }
     },
     key_findings: {
       type: "array",
-      minItems: 2,
+      minItems: 1,
       maxItems: 6,
       items: {
         type: "object",
@@ -265,6 +265,9 @@ const isStructuredOutputUnsupported = (status: number, bodyPreview: string) => {
   const mentionsStructuredOutput =
     normalized.includes("response_format") ||
     normalized.includes("json_schema") ||
+    normalized.includes("format.schema") ||
+    normalized.includes("output_config") ||
+    normalized.includes("schema") ||
     normalized.includes("structured") ||
     normalized.includes("response-healing");
   const mentionsUnsupported =

@@ -73,6 +73,10 @@ type CapturedOpenRouterRequest = {
       strict?: boolean;
       schema?: {
         required?: string[];
+        properties?: {
+          executive_summary?: { minItems?: number };
+          key_findings?: { minItems?: number };
+        };
       };
     };
   };
@@ -330,6 +334,8 @@ test("report client repairs malformed JSON once", async () => {
     assert.equal(firstRequestBody.response_format?.json_schema?.name, "operational_report");
     assert.equal(firstRequestBody.response_format?.json_schema?.strict, true);
     assert.ok(firstRequestBody.response_format?.json_schema?.schema?.required?.includes("key_findings"));
+    assert.equal(firstRequestBody.response_format?.json_schema?.schema?.properties?.executive_summary?.minItems, 1);
+    assert.equal(firstRequestBody.response_format?.json_schema?.schema?.properties?.key_findings?.minItems, 1);
     assert.ok(firstRequestBody.plugins?.some((plugin) => plugin.id === "response-healing"));
     assert.ok(!firstRequestBody.messages?.[1]?.content?.includes("\n  \"filterKey\""));
     assert.equal(calls, 2);
@@ -457,7 +463,7 @@ test("report client retries without structured output when provider rejects json
     requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as CapturedOpenRouterRequest);
 
     if (requestBodies.length === 1) {
-      return new Response("response_format json_schema is not supported by this provider", {
+      return new Response("output_config.format.schema: For 'array' type, minItems values other than 0 or 1 are not supported", {
         status: 400,
         headers: { "content-type": "text/plain" }
       });
