@@ -17,6 +17,7 @@ import {
   getAnalyticsLab,
   getTimeOfDayComposition
 } from "../queries/dashboard.js";
+import { withDashboardDiagnostics } from "./diagnostics.js";
 import { parseEventQuery, parseFilters } from "../utils/requests.js";
 
 export const dashboardRouter = Router();
@@ -24,9 +25,21 @@ export const dashboardRouter = Router();
 dashboardRouter.get("/health", async (_request, response) => {
   try {
     await pool.query("select 1");
-    response.json({ ok: true, database: "ok", environment: appConfig.environment });
+    response.json({
+      ok: true,
+      database: "ok",
+      environment: appConfig.environment,
+      databaseConnectionSource: appConfig.databaseConnectionSource,
+      databaseEnvPresence: appConfig.databaseEnvPresence
+    });
   } catch {
-    response.status(503).json({ ok: false, database: "unavailable", environment: appConfig.environment });
+    response.status(503).json({
+      ok: false,
+      database: "unavailable",
+      environment: appConfig.environment,
+      databaseConnectionSource: appConfig.databaseConnectionSource,
+      databaseEnvPresence: appConfig.databaseEnvPresence
+    });
   }
 });
 
@@ -34,8 +47,15 @@ dashboardRouter.get("/devices", async (_request, response) => {
   response.json(await getDevices());
 });
 
-dashboardRouter.get("/filters/options", async (_request, response) => {
-  response.json(await getFilterOptions());
+dashboardRouter.get("/filters/options", async (request, response) => {
+  await withDashboardDiagnostics(request, response, "filters/options", getFilterOptions, (result) => ({
+    cameras: result.cameras.length,
+    macs: result.macs.length,
+    categories: result.subjectCategories.length,
+    classes: result.subjectClasses.length,
+    luxMin: result.ranges.lux.min,
+    luxMax: result.ranges.lux.max
+  }));
 });
 
 dashboardRouter.get("/kpis", async (request, response) => {
@@ -67,7 +87,19 @@ dashboardRouter.get("/charts/composition", async (request, response) => {
 });
 
 dashboardRouter.get("/overview", async (request, response) => {
-  response.json(await getOverview(parseFilters(request.query as Record<string, unknown>)));
+  await withDashboardDiagnostics(
+    request,
+    response,
+    "overview",
+    () => getOverview(parseFilters(request.query as Record<string, unknown>)),
+    (result) => ({
+      totalEvents: result.kpis.totalEvents,
+      activeCameras: result.kpis.activeCameras,
+      categoryDistribution: result.categoryDistribution.length,
+      hourlyActivity: result.hourlyActivity.length,
+      notableEvents: result.notableEvents.length
+    })
+  );
 });
 
 dashboardRouter.get("/analytics-lab", async (request, response) => {

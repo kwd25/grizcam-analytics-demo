@@ -20,6 +20,22 @@ type OpenRouterResult = {
   nativeFinishReason: string | null;
 };
 
+type OpenRouterRequestBody = {
+  model: string;
+  messages: Array<{ role: "system" | "user"; content: string }>;
+  temperature: number;
+  max_tokens: number;
+  response_format?: {
+    type: "json_schema";
+    json_schema: {
+      name: string;
+      strict: boolean;
+      schema: typeof OPERATIONAL_REPORT_JSON_SCHEMA;
+    };
+  };
+  plugins?: Array<{ id: string }>;
+};
+
 export type ReportGenerationResult = {
   report: OperationalReport;
   timingMs: {
@@ -214,6 +230,88 @@ const isTruncatedFinishReason = (reason: string | null | undefined) => {
   return normalized === "length" || normalized === "max_tokens" || normalized === "max_completion_tokens" || normalized === "token_limit";
 };
 
+const buildOpenRouterBody = (
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  useStructuredOutput: boolean
+): OpenRouterRequestBody => {
+  const body: OpenRouterRequestBody = {
+    model: appConfig.openRouterModel,
+    messages,
+    temperature: 0.2,
+    max_tokens: appConfig.reportMaxTokens
+  };
+
+  if (useStructuredOutput) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: "operational_report",
+        strict: true,
+        schema: OPERATIONAL_REPORT_JSON_SCHEMA
+      }
+    };
+    body.plugins = [{ id: "response-healing" }];
+  }
+
+  return body;
+};
+
+const isStructuredOutputUnsupported = (status: number, bodyPreview: string) => {
+  if (status !== 400 && status !== 422) {
+    return false;
+  }
+
+  const normalized = bodyPreview.toLowerCase();
+  const mentionsStructuredOutput =
+    normalized.includes("response_format") ||
+    normalized.includes("json_schema") ||
+    normalized.includes("structured") ||
+    normalized.includes("response-healing");
+  const mentionsUnsupported =
+    normalized.includes("unsupported") ||
+    normalized.includes("not supported") ||
+    normalized.includes("unrecognized") ||
+    normalized.includes("invalid") ||
+    normalized.includes("not available");
+
+  return mentionsStructuredOutput && mentionsUnsupported;
+};
+
+const providerErrorForStatus = (status: number, bodyPreview: string) => {
+  if (status === 401 || status === 403) {
+    return {
+      code: "REPORT_MODEL_AUTH_FAILED" as const,
+      message: `OpenRouter rejected the configured API key or project permissions with HTTP ${status}.`
+    };
+  }
+
+  if (status === 404) {
+    return {
+      code: "REPORT_MODEL_NOT_FOUND" as const,
+      message: `The configured report model was not found by OpenRouter: ${appConfig.openRouterModel}.`
+    };
+  }
+
+  if (status === 429) {
+    return {
+      code: "REPORT_MODEL_RATE_LIMITED" as const,
+      message: "OpenRouter rate-limited report generation. Retry after capacity resets or raise the provider quota."
+    };
+  }
+
+  if (status >= 500) {
+    return {
+      code: "REPORT_MODEL_PROVIDER_ERROR" as const,
+      message: `OpenRouter returned HTTP ${status} while generating the report.`
+    };
+  }
+
+  return {
+    code: "REPORT_MODEL_BAD_REQUEST" as const,
+    message: `OpenRouter rejected the report request with HTTP ${status}.${bodyPreview ? ` ${bodyPreview}` : ""}`
+  };
+};
+
 const throwIfTruncated = (result: OpenRouterResult, phase: "initial" | "repair") => {
   if (!isTruncatedFinishReason(result.finishReason) && !isTruncatedFinishReason(result.nativeFinishReason)) {
     return;
@@ -243,7 +341,7 @@ const getCallTimeoutMs = (deadlineAtMs?: number) => {
 
 const callOpenRouter = async (
   messages: Array<{ role: "system" | "user"; content: string }>,
-  options: ReportGenerationOptions & { phase: "initial" | "repair"; promptChars: number }
+  options: ReportGenerationOptions & { phase: "initial" | "repair"; promptChars: number; useStructuredOutput?: boolean }
 ) => {
   if (!appConfig.openRouterApiKey) {
     throw new ReportServiceError(
@@ -253,10 +351,19 @@ const callOpenRouter = async (
     );
   }
 
+  if (!appConfig.openRouterModel.trim()) {
+    throw new ReportServiceError(
+      "REPORT_MODEL_BAD_REQUEST",
+      "Report generation is unavailable because OPENROUTER_MODEL is empty on the server.",
+      "calling_model"
+    );
+  }
+
   const controller = new AbortController();
   const timeoutMs = getCallTimeoutMs(options.deadlineAtMs);
   const startedAt = Date.now();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const useStructuredOutput = options.useStructuredOutput ?? true;
 
   console.log("reports.model.start", {
     requestId: options.requestId ?? null,
@@ -265,6 +372,7 @@ const callOpenRouter = async (
     timeoutMs,
     promptChars: options.promptChars,
     maxTokens: appConfig.reportMaxTokens,
+    structuredOutput: useStructuredOutput,
     remainingDeadlineMs: Number.isFinite(remainingDeadlineMs(options.deadlineAtMs)) ? Math.max(0, remainingDeadlineMs(options.deadlineAtMs)) : null
   });
 
@@ -276,21 +384,7 @@ const callOpenRouter = async (
         Authorization: `Bearer ${appConfig.openRouterApiKey}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: appConfig.openRouterModel,
-        messages,
-        temperature: 0.2,
-        max_tokens: appConfig.reportMaxTokens,
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "operational_report",
-            strict: true,
-            schema: OPERATIONAL_REPORT_JSON_SCHEMA
-          }
-        },
-        plugins: [{ id: "response-healing" }]
-      }),
+      body: JSON.stringify(buildOpenRouterBody(messages, useStructuredOutput)),
       signal: controller.signal
     });
   } catch (error) {
@@ -311,12 +405,30 @@ const callOpenRouter = async (
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    console.error("OpenRouter report generation failed", {
+    const bodyPreview = text.slice(0, 400);
+    console.error("reports.model.provider_error", {
+      requestId: options.requestId ?? null,
+      phase: options.phase,
       model: appConfig.openRouterModel,
       status: response.status,
-      bodyPreview: text.slice(0, 400)
+      elapsedMs,
+      structuredOutput: useStructuredOutput,
+      bodyPreview
     });
-    throw new ReportServiceError("REPORT_MODEL_UNAVAILABLE", "The report generation service is unavailable right now.", "calling_model");
+
+    if (useStructuredOutput && isStructuredOutputUnsupported(response.status, bodyPreview)) {
+      console.warn("reports.model.structured_output_fallback", {
+        requestId: options.requestId ?? null,
+        phase: options.phase,
+        model: appConfig.openRouterModel,
+        status: response.status,
+        remainingDeadlineMs: Number.isFinite(remainingDeadlineMs(options.deadlineAtMs)) ? Math.max(0, remainingDeadlineMs(options.deadlineAtMs)) : null
+      });
+      return await callOpenRouter(messages, { ...options, useStructuredOutput: false });
+    }
+
+    const providerError = providerErrorForStatus(response.status, bodyPreview);
+    throw new ReportServiceError(providerError.code, providerError.message, "calling_model");
   }
 
   const payload = (await response.json()) as OpenRouterResponse;
@@ -330,7 +442,8 @@ const callOpenRouter = async (
     status: response.status,
     responseChars: result.content.length,
     finishReason: result.finishReason,
-    nativeFinishReason: result.nativeFinishReason
+    nativeFinishReason: result.nativeFinishReason,
+    structuredOutput: useStructuredOutput
   });
 
   return result;

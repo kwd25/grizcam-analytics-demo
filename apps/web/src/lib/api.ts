@@ -51,6 +51,29 @@ const isStructuredQueryResponse = (payload: unknown): payload is { issues: unkno
   return "issues" in payload && Array.isArray((payload as { issues?: unknown[] }).issues);
 };
 
+const getPayloadString = (payload: unknown, key: "error" | "reason" | "code" | "requestId") =>
+  payload && typeof payload === "object" && key in payload && typeof (payload as Record<string, unknown>)[key] === "string"
+    ? String((payload as Record<string, unknown>)[key])
+    : null;
+
+const getPayloadDetailsMessage = (payload: unknown) => {
+  if (!payload || typeof payload !== "object" || !("details" in payload)) {
+    return null;
+  }
+
+  const details = (payload as { details?: unknown }).details;
+  return details && typeof details === "object" && "message" in details && typeof (details as { message?: unknown }).message === "string"
+    ? (details as { message: string }).message
+    : null;
+};
+
+const buildApiErrorMessage = (payload: unknown, fallback: string) => {
+  const message = getPayloadString(payload, "reason") ?? getPayloadString(payload, "error") ?? getPayloadDetailsMessage(payload) ?? fallback;
+  const code = getPayloadString(payload, "code");
+  const requestId = getPayloadString(payload, "requestId");
+  return [message, code ? `Code: ${code}.` : null, requestId ? `Request ID: ${requestId}.` : null].filter(Boolean).join(" ");
+};
+
 const buildParams = (filters: DashboardFilters | EventQuery) => {
   const params = new URLSearchParams();
 
@@ -78,7 +101,7 @@ const fetchJson = async <T>(path: string, filters?: DashboardFilters | EventQuer
   const response = await fetch(url);
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(payload?.error ?? payload?.issues?.[0]?.message ?? `Request failed: ${response.status}`);
+    throw new Error(buildApiErrorMessage(payload, `Request failed: ${response.status}`));
   }
   return payload as T;
 };
@@ -146,12 +169,7 @@ const postJson = async <T>(path: string, body: unknown, timeoutMs = QUERY_REQUES
     const payload = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const message =
-        payload && typeof payload === "object" && "reason" in payload && typeof (payload as { reason?: unknown }).reason === "string"
-          ? (payload as { reason: string }).reason
-          : payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string"
-            ? (payload as { error: string }).error
-          : `Request failed: ${response.status}`;
+      const message = buildApiErrorMessage(payload, `Request failed: ${response.status}`);
       throw new QueryRequestError("INVALID_RESPONSE", message);
     }
 

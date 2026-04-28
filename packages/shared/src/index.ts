@@ -580,6 +580,9 @@ export type ReportViewStatus = z.infer<typeof reportViewStatusSchema>;
 export const reportConnectionSourceSchema = z.enum([
   "reports_database_url",
   "database_url",
+  "postgres_url",
+  "postgres_prisma_url",
+  "postgres_url_non_pooling",
   "local_postgres",
   "unconfigured"
 ]);

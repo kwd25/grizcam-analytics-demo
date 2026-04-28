@@ -25,7 +25,15 @@ const localOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
 const configuredOrigins = parseOrigins(process.env.ALLOWED_ORIGINS);
 const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : isProduction ? [] : localOrigins;
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrlCandidates = [
+  ["database_url", process.env.DATABASE_URL],
+  ["postgres_url", process.env.POSTGRES_URL],
+  ["postgres_prisma_url", process.env.POSTGRES_PRISMA_URL],
+  ["postgres_url_non_pooling", process.env.POSTGRES_URL_NON_POOLING]
+] as const;
+const selectedDatabaseUrl = databaseUrlCandidates.find(([, value]) => Boolean(value));
+const databaseConnectionSource = selectedDatabaseUrl?.[0] ?? (!isProduction ? "local_postgres" : "unconfigured");
+const databaseUrl = selectedDatabaseUrl?.[1];
 const reportsDatabaseUrl = process.env.REPORTS_DATABASE_URL;
 const demoExportsEnabled = process.env.DEMO_EXPORTS_ENABLED ?? process.env.ENABLE_EVENT_EXPORTS;
 const defaultPostgresConfig = {
@@ -45,8 +53,8 @@ const postgres = databaseUrl
 
 const reportsConnectionSource = reportsDatabaseUrl
   ? "reports_database_url"
-  : databaseUrl
-    ? "database_url"
+  : databaseUrl && databaseConnectionSource !== "unconfigured"
+    ? databaseConnectionSource
     : !isProduction
       ? "local_postgres"
       : "unconfigured";
@@ -67,7 +75,7 @@ const reportsPostgres =
         : null;
 
 if (isProduction && !databaseUrl) {
-  throw new Error("DATABASE_URL is required in production.");
+  throw new Error("DATABASE_URL, POSTGRES_URL, POSTGRES_PRISMA_URL, or POSTGRES_URL_NON_POOLING is required in production.");
 }
 
 if (isProduction && allowedOrigins.length === 0) {
@@ -89,6 +97,13 @@ export const appConfig = {
   reportPromptVersion: process.env.REPORT_PROMPT_VERSION ?? "v1",
   reportsEnabled: Boolean(reportsPostgres),
   reportsConnectionSource,
+  databaseConnectionSource,
+  databaseEnvPresence: {
+    databaseUrl: Boolean(process.env.DATABASE_URL),
+    postgresUrl: Boolean(process.env.POSTGRES_URL),
+    postgresPrismaUrl: Boolean(process.env.POSTGRES_PRISMA_URL),
+    postgresUrlNonPooling: Boolean(process.env.POSTGRES_URL_NON_POOLING)
+  },
   apiRateLimit: {
     windowMs: parseNumber(process.env.API_RATE_LIMIT_WINDOW_MS, 60_000),
     max: parseNumber(process.env.API_RATE_LIMIT_MAX, 120)

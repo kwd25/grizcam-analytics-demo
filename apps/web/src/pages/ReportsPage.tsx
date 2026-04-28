@@ -93,6 +93,7 @@ export const ReportsPage = () => {
 
   const inputError = (overviewQuery.error as Error | null) ?? (analyticsQuery.error as Error | null);
   const inputErrorLabel = overviewQuery.error ? "Overview analytics failed to load." : analyticsQuery.error ? "Advanced analytics failed to load." : null;
+  const inputErrorMessage = inputError ? `${inputErrorLabel ?? "Analytics inputs failed to load."} ${inputError.message}` : null;
   const inputsLoading = overviewQuery.isLoading || analyticsQuery.isLoading;
   const inputsReady = Boolean(overviewQuery.data && analyticsQuery.data && !inputError);
 
@@ -102,6 +103,15 @@ export const ReportsPage = () => {
       setReportPhase("idle");
     }
   }, [inputLoadMs, inputsReady]);
+
+  useEffect(() => {
+    if (inputErrorMessage) {
+      setReportStatus("error");
+      setReportPhase("building_snapshot");
+      setReportReason(inputErrorMessage);
+      setReportErrorCode("REPORT_INPUT_UNAVAILABLE");
+    }
+  }, [inputErrorMessage]);
 
   const snapshot: ReportSourceBundle | null = useMemo(() => {
     if (!overviewQuery.data || !analyticsQuery.data) {
@@ -114,7 +124,7 @@ export const ReportsPage = () => {
   const generateMutation = useMutation({
     mutationFn: () => {
       if (!snapshot) {
-        throw new Error("Analytics inputs are not ready yet.");
+        throw new Error(inputErrorMessage ?? "Analytics inputs are not ready yet.");
       }
       return api.triggerReportGeneration(stableFilters, snapshot, true);
     },
@@ -145,7 +155,7 @@ export const ReportsPage = () => {
 
   const visibleStatus = generateMutation.isPending ? "generating" : reportStatus;
   const visiblePhase = generateMutation.isPending ? "calling_model" : reportPhase;
-  const visibleReason = reportReason ?? (!healthQuery.data?.openRouterConfigured ? "OPENROUTER_API_KEY is not configured on the server." : null);
+  const visibleReason = inputErrorMessage ?? reportReason ?? (!healthQuery.data?.openRouterConfigured ? "OPENROUTER_API_KEY is not configured on the server." : null);
   const timingMs = generatedReport?.debug?.timingMs ?? {};
   const generatedBriefing = generatedReport?.report ?? null;
   const diagnosticEntries = [
@@ -158,7 +168,7 @@ export const ReportsPage = () => {
     { label: "Snapshot size", value: timingMs.snapshotBytes, unit: "bytes" },
     { label: "Prompt chars", value: timingMs.promptChars, unit: "chars" }
   ].filter((entry): entry is { label: string; value: number; unit: string } => typeof entry.value === "number");
-  const canGenerate = Boolean(snapshot) && !inputsLoading && !generateMutation.isPending && healthQuery.data?.openRouterConfigured !== false;
+  const canGenerate = Boolean(snapshot) && !inputsLoading && !inputError && !generateMutation.isPending && healthQuery.data?.openRouterConfigured !== false;
   const hasStorageWarning = healthQuery.data && !healthQuery.data.reportsEnabled && healthQuery.data.supportsEphemeralGeneration;
   const storageWarningDetail = healthQuery.data?.reportsFailureReason ?? "You can still generate a report manually from the loaded analytics inputs.";
   const visibleRequestId = reportRequestId ?? generatedReport?.debug?.requestId ?? null;
@@ -188,7 +198,7 @@ export const ReportsPage = () => {
       ) : inputError ? (
         <QueryState
           title="Report inputs failed to load"
-          detail={`${inputErrorLabel ?? "Analytics inputs failed to load."} ${inputError.message}`}
+          detail={inputErrorMessage ?? "Analytics inputs failed to load."}
           action={
             <button type="button" className={actionButtonClass} onClick={() => {
               void overviewQuery.refetch();

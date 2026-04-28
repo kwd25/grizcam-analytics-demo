@@ -380,6 +380,109 @@ test("report client identifies truncated model JSON", async () => {
   }
 });
 
+const providerFailureScenarios = [
+  {
+    status: 401,
+    body: "invalid api key",
+    code: "REPORT_MODEL_AUTH_FAILED",
+    message: "API key"
+  },
+  {
+    status: 403,
+    body: "forbidden",
+    code: "REPORT_MODEL_AUTH_FAILED",
+    message: "project permissions"
+  },
+  {
+    status: 404,
+    body: "model not found",
+    code: "REPORT_MODEL_NOT_FOUND",
+    message: "configured report model"
+  },
+  {
+    status: 429,
+    body: "rate limited",
+    code: "REPORT_MODEL_RATE_LIMITED",
+    message: "rate-limited"
+  },
+  {
+    status: 502,
+    body: "bad gateway",
+    code: "REPORT_MODEL_PROVIDER_ERROR",
+    message: "HTTP 502"
+  },
+  {
+    status: 400,
+    body: "bad request",
+    code: "REPORT_MODEL_BAD_REQUEST",
+    message: "HTTP 400"
+  }
+] as const;
+
+for (const scenario of providerFailureScenarios) {
+  test(`report client maps OpenRouter HTTP ${scenario.status} to ${scenario.code}`, async () => {
+    const originalKey = appConfig.openRouterApiKey;
+    const originalFetch = globalThis.fetch;
+
+    appConfig.openRouterApiKey = "test-key";
+    globalThis.fetch = async () =>
+      new Response(scenario.body, {
+        status: scenario.status,
+        headers: { "content-type": "text/plain" }
+      });
+
+    try {
+      const client = createOpenRouterReportClient();
+      await assert.rejects(
+        () => client.generateReport(snapshot, { requestId: `provider-${scenario.status}`, deadlineAtMs: Date.now() + 5_000 }),
+        (error) =>
+          error instanceof ReportServiceError &&
+          error.code === scenario.code &&
+          error.message.toLowerCase().includes(scenario.message.toLowerCase())
+      );
+    } finally {
+      appConfig.openRouterApiKey = originalKey;
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test("report client retries without structured output when provider rejects json_schema controls", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const requestBodies: CapturedOpenRouterRequest[] = [];
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async (_url, init) => {
+    requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as CapturedOpenRouterRequest);
+
+    if (requestBodies.length === 1) {
+      return new Response("response_format json_schema is not supported by this provider", {
+        status: 400,
+        headers: { "content-type": "text/plain" }
+      });
+    }
+
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReport) } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    const result = await client.generateReport(snapshot, { requestId: "structured-fallback-test", deadlineAtMs: Date.now() + 10_000 });
+    assert.equal(result.report.headline, validReport.headline);
+    assert.equal(requestBodies.length, 2);
+    assert.equal(requestBodies[0]?.response_format?.type, "json_schema");
+    assert.equal(requestBodies[1]?.response_format, undefined);
+    assert.equal(requestBodies[1]?.plugins, undefined);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("report client times out within the model deadline", async () => {
   const originalKey = appConfig.openRouterApiKey;
   const originalFetch = globalThis.fetch;
