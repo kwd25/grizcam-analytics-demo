@@ -109,6 +109,48 @@ Rules:
 - Output JSON only.
 - Do not add markdown fences or commentary.`;
 
+const STRICT_REPAIR_PROMPT = `Convert failed report model output into one valid JSON object matching the required schema exactly.
+
+Rules:
+- The first character of your response must be {.
+- The last character of your response must be }.
+- Output only JSON. No markdown, no code fences, no apologies, no explanations, no observations, no meta-commentary.
+- Do not write phrases like "I notice", "Here is", "The issue is", or "I fixed".
+- Preserve the original meaning where possible.
+- Use only the supplied failed responses.
+- If a required field is missing, fill it with concise operator-facing language grounded in the supplied failed responses.
+- Required JSON shape:
+{
+  "headline": "string",
+  "executive_summary": ["string"],
+  "key_findings": [
+    {
+      "title": "string",
+      "evidence": ["string"],
+      "confidence": "low|medium|high",
+      "actionability": "string"
+    }
+  ],
+  "recommended_actions": [
+    {
+      "priority": 1,
+      "action": "string",
+      "why": "string"
+    }
+  ],
+  "risks_or_watchouts": [
+    {
+      "title": "string",
+      "impact": "string",
+      "suggested_followup": "string"
+    }
+  ],
+  "open_questions": ["string"]
+}
+- Array limits: executive_summary 1-4, key_findings 1-6, evidence 1-3 per finding, recommended_actions 1-5, risks_or_watchouts 0-5, open_questions 0-5.
+- Confidence must be exactly one of low, medium, or high.
+- Priority must be an integer from 1 to 5.`;
+
 const OPERATIONAL_REPORT_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -217,12 +259,53 @@ const stripJsonFences = (raw: string) =>
     .trim();
 
 const extractJsonObject = (raw: string) => {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return raw.slice(start, end + 1);
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+
+    if (start < 0) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, index + 1);
+      }
+    }
   }
-  return raw;
+
+  if (start >= 0) {
+    throw new Error("The report response did not contain a complete JSON object.");
+  }
+
+  throw new Error("The report response did not contain a JSON object.");
 };
 
 const isRecord = (value: unknown): value is UnknownRecord => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -307,7 +390,9 @@ const normalizeReportCandidate = (candidate: unknown) => {
   return { candidate: normalized, adjustments };
 };
 
-const parseReport = (raw: string, context: { requestId?: string; phase: "initial" | "repair" }): OperationalReport => {
+type ReportModelPhase = "initial" | "repair" | "strict_repair";
+
+const parseReport = (raw: string, context: { requestId?: string; phase: ReportModelPhase }): OperationalReport => {
   const parsed = JSON.parse(extractJsonObject(stripJsonFences(raw)));
   const normalized = normalizeReportCandidate(parsed);
   if (Object.keys(normalized.adjustments).length > 0) {
@@ -410,7 +495,7 @@ const providerErrorForStatus = (status: number, bodyPreview: string) => {
   };
 };
 
-const throwIfTruncated = (result: OpenRouterResult, phase: "initial" | "repair") => {
+const throwIfTruncated = (result: OpenRouterResult, phase: ReportModelPhase) => {
   if (!isTruncatedFinishReason(result.finishReason) && !isTruncatedFinishReason(result.nativeFinishReason)) {
     return;
   }
@@ -423,6 +508,8 @@ const throwIfTruncated = (result: OpenRouterResult, phase: "initial" | "repair")
 };
 
 const remainingDeadlineMs = (deadlineAtMs?: number) => (deadlineAtMs ? deadlineAtMs - Date.now() : Number.POSITIVE_INFINITY);
+
+const hasRepairTime = (deadlineAtMs?: number) => remainingDeadlineMs(deadlineAtMs) >= appConfig.reportRepairMinRemainingMs;
 
 const getCallTimeoutMs = (deadlineAtMs?: number) => {
   const remainingMs = remainingDeadlineMs(deadlineAtMs);
@@ -439,7 +526,7 @@ const getCallTimeoutMs = (deadlineAtMs?: number) => {
 
 const callOpenRouter = async (
   messages: Array<{ role: "system" | "user"; content: string }>,
-  options: ReportGenerationOptions & { phase: "initial" | "repair"; promptChars: number; useStructuredOutput?: boolean }
+  options: ReportGenerationOptions & { phase: ReportModelPhase; promptChars: number; useStructuredOutput?: boolean }
 ) => {
   if (!appConfig.openRouterApiKey) {
     throw new ReportServiceError(
@@ -547,6 +634,23 @@ const callOpenRouter = async (
   return result;
 };
 
+const buildStrictRepairPrompt = (input: {
+  originalResponse: string;
+  repairedResponse: string;
+  initialError: unknown;
+  repairError: unknown;
+}) => `Initial validation failure:
+${summarizeModelOutputError(input.initialError)}
+
+Repair validation failure:
+${summarizeModelOutputError(input.repairError)}
+
+Original response:
+${input.originalResponse}
+
+Failed repair response:
+${input.repairedResponse}`;
+
 export const createOpenRouterReportClient = (): ReportModelClient => ({
   async generateReport(snapshot, options = {}) {
     const snapshotJson = JSON.stringify(snapshot);
@@ -576,7 +680,7 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
     } catch (error) {
       timingMs.validation += Date.now() - firstValidationStartedAt;
 
-      if (remainingDeadlineMs(options.deadlineAtMs) < appConfig.reportRepairMinRemainingMs) {
+      if (!hasRepairTime(options.deadlineAtMs)) {
         const message = summarizeModelOutputError(error);
         throw new ReportServiceError(
           "REPORT_INVALID_MODEL_OUTPUT",
@@ -605,12 +709,48 @@ export const createOpenRouterReportClient = (): ReportModelClient => ({
         return { report, timingMs };
       } catch (repairError) {
         timingMs.validation += Date.now() - repairValidationStartedAt;
-        const message = summarizeModelOutputError(repairError);
-        throw new ReportServiceError(
-          "REPORT_INVALID_MODEL_OUTPUT",
-          `The report model returned invalid report output after repair. ${message}`,
-          "validating_response"
-        );
+
+        if (!hasRepairTime(options.deadlineAtMs)) {
+          const message = summarizeModelOutputError(repairError);
+          throw new ReportServiceError(
+            "REPORT_INVALID_MODEL_OUTPUT",
+            `The report model returned invalid report output after repair and there was not enough time left for a strict repair retry before the server deadline. ${message}`,
+            "validating_response"
+          );
+        }
+
+        const strictRepairPrompt = buildStrictRepairPrompt({
+          originalResponse: rawResult.content,
+          repairedResponse: repairedResult.content,
+          initialError: error,
+          repairError
+        });
+        const strictRepairModelStartedAt = Date.now();
+        timingMs.modelCalls += 1;
+        const strictRepairedResult = await callOpenRouter([
+          { role: "system", content: STRICT_REPAIR_PROMPT },
+          {
+            role: "user",
+            content: strictRepairPrompt
+          }
+        ], { ...options, phase: "strict_repair", promptChars: strictRepairPrompt.length });
+        timingMs.modelRequest += Date.now() - strictRepairModelStartedAt;
+
+        const strictRepairValidationStartedAt = Date.now();
+        try {
+          throwIfTruncated(strictRepairedResult, "strict_repair");
+          const report = parseReport(strictRepairedResult.content, { requestId: options.requestId, phase: "strict_repair" });
+          timingMs.validation += Date.now() - strictRepairValidationStartedAt;
+          return { report, timingMs };
+        } catch (strictRepairError) {
+          timingMs.validation += Date.now() - strictRepairValidationStartedAt;
+          const message = summarizeModelOutputError(strictRepairError);
+          throw new ReportServiceError(
+            "REPORT_INVALID_MODEL_OUTPUT",
+            `The report model returned invalid report output after strict repair. ${message}`,
+            "validating_response"
+          );
+        }
       }
     }
   }
