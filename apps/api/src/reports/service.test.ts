@@ -346,6 +346,124 @@ test("report client repairs malformed JSON once", async () => {
   }
 });
 
+test("report client accepts prose-wrapped JSON from the model", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: `Here is the report JSON:\n${JSON.stringify(validReport)}\nDone.`
+            }
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    const result = await client.generateReport(snapshot, { requestId: "prose-wrapped-json-test", deadlineAtMs: Date.now() + 5_000 });
+    assert.equal(result.report.headline, validReport.headline);
+    assert.equal(calls, 1);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client rejects prose-only output when repair cannot safely run", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalRepairMinRemaining = appConfig.reportRepairMinRemainingMs;
+  let calls = 0;
+
+  appConfig.openRouterApiKey = "test-key";
+  appConfig.reportRepairMinRemainingMs = 8_000;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: "I notice this should be a report, but I am explaining instead of returning JSON."
+            }
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }
+    );
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "prose-only-test", deadlineAtMs: Date.now() + 2_000 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_INVALID_MODEL_OUTPUT" &&
+        error.message.includes("did not contain a JSON object")
+    );
+    assert.equal(calls, 1);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportRepairMinRemainingMs = originalRepairMinRemaining;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client runs strict repair when regular repair returns prose", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const requestBodies: CapturedOpenRouterRequest[] = [];
+
+  appConfig.openRouterApiKey = "test-key";
+  globalThis.fetch = async (_url, init) => {
+    calls += 1;
+    requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as CapturedOpenRouterRequest);
+
+    const content =
+      calls === 1
+        ? "{\"headline\":\"Broken\""
+        : calls === 2
+          ? "I notice the prior response is malformed because it is missing the required arrays."
+          : JSON.stringify(validReport);
+
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    const result = await client.generateReport(snapshot, { requestId: "strict-repair-test", deadlineAtMs: Date.now() + 10_000 });
+    assert.equal(result.report.headline, validReport.headline);
+    assert.equal(result.timingMs.modelCalls, 3);
+    assert.equal(calls, 3);
+    assert.ok(requestBodies[2]?.messages?.[0]?.content?.includes("first character"));
+    assert.ok(requestBodies[2]?.messages?.[1]?.content?.includes("I notice the prior response"));
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("report client identifies truncated model JSON", async () => {
   const originalKey = appConfig.openRouterApiKey;
   const originalFetch = globalThis.fetch;
@@ -652,6 +770,44 @@ test("report client skips repair when the server deadline is too close", async (
         error.message.includes("not enough time left")
     );
     assert.equal(calls, 1);
+  } finally {
+    appConfig.openRouterApiKey = originalKey;
+    appConfig.reportRepairMinRemainingMs = originalRepairMinRemaining;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("report client skips strict repair when the server deadline is too close", async () => {
+  const originalKey = appConfig.openRouterApiKey;
+  const originalFetch = globalThis.fetch;
+  const originalRepairMinRemaining = appConfig.reportRepairMinRemainingMs;
+  let calls = 0;
+
+  appConfig.openRouterApiKey = "test-key";
+  appConfig.reportRepairMinRemainingMs = 1_500;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 2) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    const content = calls === 1 ? "{\"headline\":\"Broken\"" : "I notice this repair is still not JSON.";
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    const client = createOpenRouterReportClient();
+    await assert.rejects(
+      () => client.generateReport(snapshot, { requestId: "strict-repair-skip-test", deadlineAtMs: Date.now() + 1_700 }),
+      (error) =>
+        error instanceof ReportServiceError &&
+        error.code === "REPORT_INVALID_MODEL_OUTPUT" &&
+        error.message.includes("not enough time left for a strict repair retry")
+    );
+    assert.equal(calls, 2);
   } finally {
     appConfig.openRouterApiKey = originalKey;
     appConfig.reportRepairMinRemainingMs = originalRepairMinRemaining;
