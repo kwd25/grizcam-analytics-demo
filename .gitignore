@@ -5,4 +5,7 @@ dist
 .env.local
 coverage
 *.log
-
+__pycache__
+*.pyc
+synthetic/generated_raw_events.json
+synthetic/generated_raw_events.json.gz

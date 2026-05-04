@@ -9,7 +9,6 @@ import type {
   ReportViewStatus
 } from "@grizcam/shared";
 import { reportsPool } from "../db.js";
-import { REPORTS_TABLE_SQL } from "./schema.js";
 
 export type StoredReportRow = {
   id: string;

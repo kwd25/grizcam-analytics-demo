@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { CameraHealthRow, ProcessingFunnelPoint } from "@grizcam/shared";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import type { ProcessingFunnelPoint } from "@grizcam/shared";
 import { AppShell } from "../components/AppShell";
 import { CameraHealthTable } from "../components/CameraHealthTable";
 import { FilterBar } from "../components/FilterBar";
